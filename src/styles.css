@@ -288,6 +288,23 @@ body:not(.research) .research-only { display: none !important; }
   min-height: 28px; padding: .1rem .45rem; cursor: help;
 }
 
+/* ---------- revisão de vizinhanças ---------- */
+.revh { font-family: var(--mono); font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; margin: .7rem 0 .25rem; }
+.revh.conf-certa { color: #2b7a4b; } .revh.conf-provavel { color: #a06a08; } .revh.conf-duvidosa { color: var(--accent); }
+.revrow {
+  display: grid; grid-template-columns: auto 1fr auto; gap: .1rem .5rem; align-items: center;
+  padding: .3rem .4rem; border: 1px solid var(--rule); border-left-width: 4px; border-radius: 6px; margin-bottom: .3rem; background: var(--field);
+}
+.revrow.conf-certa { border-left-color: #2b7a4b; } .revrow.conf-provavel { border-left-color: #c98a1a; border-left-style: dashed; }
+.revrow.conf-duvidosa { border-left-color: var(--accent); border-left-style: dotted; }
+.revrow.focus { box-shadow: 0 0 0 2px var(--accent); }
+.revrow input { width: 20px; height: 20px; accent-color: var(--accent); grid-row: span 2; }
+.revrow .revname { justify-content: flex-start; text-align: left; text-decoration: none; min-height: 0; }
+.revrow .revname small { color: var(--muted); font-weight: 400; }
+.revrow .mini { grid-column: 2; }
+.revrow .tag { grid-column: 3; grid-row: 1 / span 2; white-space: normal; text-align: center; }
+input.calib { width: 6rem; min-height: 32px; background: var(--paper); }
+
 /* ---------- bottom sheet ---------- */
 .sheet {
   position: fixed; z-index: 60; right: 1rem; bottom: 1rem; width: 350px; max-height: 75vh; overflow-y: auto;

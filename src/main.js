@@ -3,6 +3,7 @@ import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
 import { snapPoint, sharedWall } from './geometry/snap.ts';
+import { detectAdjacency, closeGaps } from './geometry/adjacency.ts';
 
 const $ = id => document.getElementById(id);
 const MONO = 'Menlo, Consolas, Courier New, monospace';
@@ -52,6 +53,9 @@ const findEdge = key => model.edges.find(e => edgeKey(e) === key);
 // Modo Simples (padrão) = o grafo de permeabilidade de sempre: só a camada acesso, sem tipos, faces nem camadas na tela.
 // Modo Pesquisa = interfaces tipadas, camadas e orientação NSLO. Os dados são os mesmos; muda o que se vê e se analisa.
 let researchMode = false;
+// Detecção de vizinhança (F4.3.3): tolerâncias em cm, convertidas pela escala do desenho (geo).
+let tolCm = 15, minContactCm = 30;
+let review = null; // { cands, sel: Set<chave do par>, focus } enquanto a revisão está aberta
 let linkKind = 'acesso'; // categoria das ligações criadas no modo Ligar (Pesquisa)
 /**
  * Traço de cada categoria no modo Pesquisa: cor E padrão distintos (daltonismo, impressão P&B).
@@ -106,7 +110,7 @@ function autosave() {
   try {
     localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      currentMeasure, showValues, snap, radius, conv, projector, layer, doorIsVisual, researchMode,
+      currentMeasure, showValues, snap, radius, conv, projector, layer, doorIsVisual, researchMode, tolCm, minContactCm,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -129,6 +133,8 @@ function loadSaved() {
       if (LAYERS.includes(o.layer)) layer = o.layer;
       researchMode = !!o.researchMode;
       if (o.doorIsVisual === false) doorIsVisual = false;
+      if (o.tolCm > 0) tolCm = o.tolCm;
+      if (o.minContactCm > 0) minContactCm = o.minContactCm;
       if (o.bg) bg = Object.assign(bg, o.bg);
     }
     const pj = localStorage.getItem('ssx_project');
@@ -187,6 +193,7 @@ function recompute() {
   if (selEdge && !findEdge(selEdge)) selEdge = null;
   if (linkFrom && !byId.has(linkFrom)) linkFrom = null;
   R = analyse(model);
+  if (review) refreshReview();
   renderAll();
   autosave();
 }
@@ -231,6 +238,9 @@ function renderPanel() {
   $('optSnap').checked = snap; $('optValues').checked = showValues; $('optRadius').value = radius;
   $('optEntropy').value = conv.entropy; $('optHFactor').value = conv.differenceFactor;
   $('optDoorVisual').checked = doorIsVisual;
+  const sc = model.geo && model.geo.escala_m_por_unidade;
+  $('scaleTxt').textContent = sc ? t('scale.value', { n: (1 / sc).toFixed(1) }) : t('scale.none');
+  $('optTol').value = tolCm; $('optMinContact').value = minContactCm;
   document.querySelectorAll('select.layer-sel').forEach(sel => {
     sel.innerHTML = LAYERS.map(l => `<option value="${l}">${esc(t('layer.' + l))}</option>`).join('');
     sel.value = layer;
@@ -332,6 +342,7 @@ function renderGraph() {
     edgeEls.push({ a: e.a, b: e.b, ln: lines[0], extra: lines.slice(1), hit });
   });
   renderKindLegend();
+  if (review) drawReviewOverlay();
   const m = meta(currentMeasure);
   model.nodes.forEach(n => {
     const p = R.per[n.id], col = colourOf(n.id), rad = nodeRadius(n.id);
@@ -352,7 +363,7 @@ function renderGraph() {
     if (showValues) g.appendChild(txt(0, -rad - 6, FMT[m.key](valOf(n.id, m.key)), 10, C.accent, '700', 't-val'));
     svgG.appendChild(g); nodeEls[n.id] = g;
   });
-  if (mode === 'poly' && (poly.pts.length || poly.cursor)) drawPolyPreview();
+  if ((mode === 'poly' || mode === 'measure') && (poly.pts.length || poly.cursor)) drawPolyPreview();
   const [mn, mx] = measureRange(currentMeasure), f = FMT[m.key];
   $('legLo').textContent = t('legend.seg') + ' · ' + f(m.invert ? mx : mn);
   $('legHi').textContent = f(m.invert ? mn : mx) + ' · ' + t('legend.int');
@@ -435,7 +446,7 @@ svgG.addEventListener('pointerdown', e => {
   }
   if (mode === 'link') { gesture = { ...g, type: id ? 'linkNode' : 'panTap', id }; return; }
   if (mode === 'add') { gesture = { ...g, type: id ? 'nodeTap' : 'addTap', id }; return; }
-  if (mode === 'poly') { gesture = { ...g, type: 'polyPlace' }; previewSnap(pt); }
+  if (mode === 'poly' || mode === 'measure') { gesture = { ...g, type: 'polyPlace' }; previewSnap(pt); }
 });
 
 function startNodeDrag(g, id, shift) {
@@ -558,7 +569,7 @@ function hoverPreview(pt) {
     if (!pendingLine) { pendingLine = Eo('line', { stroke: C.accent, 'stroke-width': 1.4, 'stroke-dasharray': '4 3', 'pointer-events': 'none' }); svgG.appendChild(pendingLine); }
     pendingLine.setAttribute('x1', a.x); pendingLine.setAttribute('y1', a.y); pendingLine.setAttribute('x2', pt.x); pendingLine.setAttribute('y2', pt.y);
   }
-  if (mode === 'poly') previewSnap(pt);
+  if (mode === 'poly' || mode === 'measure') previewSnap(pt);
 }
 
 /* ---------------- EDIÇÃO ---------------- */
@@ -608,7 +619,7 @@ function deleteNodes(ids) {
   toast(t('toast.deleted', { n: set.size }), t('toast.undo'), undo);
 }
 function setRoot(id) { mutate(() => { model.root = id; }); }
-function clearSelection() { selSet.clear(); selEdge = null; multi = false; closeSheet(); renderGraph(); refreshSel(); }
+function clearSelection() { selSet.clear(); selEdge = null; multi = false; if (!review) closeSheet(); renderGraph(); refreshSel(); }
 function selectEdge(key) { selSet.clear(); multi = false; selEdge = key; renderGraph(); refreshSel(); openSheet({ kind: 'edge', key }); }
 
 function linkClick(id) {
@@ -633,6 +644,13 @@ function polySnap(pt) {
 function previewSnap(pt) { poly.snap = polySnap(pt); poly.cursor = poly.snap.p; drawPolyPreview(); }
 function polyAddPoint(res) {
   const p = res.p;
+  if (mode === 'measure') {
+    if (poly.pts.length >= 2) return;
+    poly.pts.push([p[0], p[1]]);
+    drawPolyPreview(); renderCtx();
+    if (poly.pts.length === 2) setTimeout(() => { const i = $('calibM'); if (i) i.focus(); }, 0);
+    return;
+  }
   if (poly.pts.length >= 3) {
     const f = poly.pts[0], ctm = svgG.getScreenCTM();
     const dx = (f[0] - p[0]) * ctm.a, dy = (f[1] - p[1]) * ctm.d;
@@ -653,7 +671,7 @@ function useSharedWall() {
 function drawPolyPreview() {
   if (polyPreview) polyPreview.remove();
   polyPreview = null;
-  if (mode !== 'poly' || (!poly.pts.length && !poly.cursor)) return;
+  if ((mode !== 'poly' && mode !== 'measure') || (!poly.pts.length && !poly.cursor)) return;
   const k = pxPerUnit(), g = Eo('g', { 'pointer-events': 'none' });
   const pts = poly.cursor ? [...poly.pts, poly.cursor] : poly.pts;
   // indicador do ímã: círculo = vértice; losango + lado destacado = parede
@@ -694,34 +712,6 @@ function finishPoly() {
 }
 function cancelPoly() { poly.pts = []; poly.cursor = null; poly.snap = null; poly.wall = null; drawPolyPreview(); renderCtx(); }
 
-function segOverlap(a1, a2, b1, b2, tol) {
-  const dax = a2[0] - a1[0], day = a2[1] - a1[1], len = Math.hypot(dax, day);
-  if (len < 1e-6) return 0;
-  const ux = dax / len, uy = day / len;
-  const perp = p => Math.abs((p[0] - a1[0]) * -uy + (p[1] - a1[1]) * ux);
-  if (perp(b1) > tol || perp(b2) > tol) return 0;
-  const proj = p => (p[0] - a1[0]) * ux + (p[1] - a1[1]) * uy;
-  let s0 = proj(b1), s1 = proj(b2);
-  if (s0 > s1) [s0, s1] = [s1, s0];
-  return Math.max(0, Math.min(len, s1) - Math.max(0, s0));
-}
-function polysShareEdge(pa, pb, tol) {
-  for (let i = 0; i < pa.length; i++) for (let j = 0; j < pb.length; j++) {
-    if (segOverlap(pa[i], pa[(i + 1) % pa.length], pb[j], pb[(j + 1) % pb.length], tol) > tol) return true;
-  }
-  return false;
-}
-function deriveAdjacency() {
-  const ps = model.nodes.filter(n => n.poly && n.poly.length >= 3);
-  if (ps.length < 2) { toast(t('toast.needPolys')); return; }
-  const found = [];
-  for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
-    const A = ps[i], B = ps[j];
-    if (polysShareEdge(A.poly, B.poly, 8) && !model.edges.some(e => edgeKey(e) === edgeKey({ a: A.id, b: B.id }))) found.push({ a: A.id, b: B.id, kind: 'acesso' });
-  }
-  if (found.length) mutate(() => model.edges.push(...found));
-  toast(found.length ? t('toast.derived', { n: found.length }) : t('toast.noDerived'));
-}
 
 /* ---------------- MODO E BARRA DE CONTEXTO ---------------- */
 function setMode(m) {
@@ -735,6 +725,12 @@ function renderCtx() {
   else if (mode === 'link') html = `<span>${linkFrom ? t('ctx.link2', { id: esc(linkFrom) }) : t('ctx.link1')}</span>` +
     (researchMode ? `<div class="kindpick inbar" role="radiogroup" aria-label="${esc(t('edge.kind'))}">${EDGE_KINDS.map(k => `<button data-ctx="linkKind" data-k="${k}" role="radio" aria-checked="${k === linkKind}" title="${esc(t('kind.' + k))}">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}</div>` : '') +
     (linkFrom ? `<button data-ctx="cancelLink">${t('btn.cancel')}</button>` : '');
+  else if (mode === 'measure') {
+    const n = poly.pts.length;
+    html = n < 2
+      ? `<span>${t('ctx.measure', { n: n + 1 })}</span><button data-ctx="cancelMeasure">${t('btn.cancel')}</button>`
+      : `<span>${t('ctx.measureDist')}</span><input type="number" id="calibM" class="calib" min="0.01" step="0.01" inputmode="decimal" placeholder="0,00"><span>m</span><button class="primary" data-ctx="calibOk">OK</button><button data-ctx="cancelMeasure">${t('btn.cancel')}</button>`;
+  }
   else if (mode === 'poly') {
     const n = poly.pts.length;
     html = `<span>${t('ctx.poly')}</span>` +
@@ -763,6 +759,8 @@ $('ctxBar').addEventListener('click', e => {
     case 'closePoly': finishPoly(); break;
     case 'cancelPoly': cancelPoly(); break;
     case 'useWall': useSharedWall(); break;
+    case 'calibOk': applyCalibration(); break;
+    case 'cancelMeasure': setMode('select'); break;
     case 'linkPair': { const [a, c] = [...selSet]; addEdge(a, c); break; }
     case 'delSel': armConfirm(b, () => deleteNodes([...selSet])); break;
     case 'doneSel': clearSelection(); break;
@@ -779,6 +777,7 @@ function sheetRows() {
   return [...new Set([...first, 'integ', 'choice', 'depth', 'conn'])].slice(0, 4);
 }
 function openSheet(target) {
+  if (review && target.kind !== 'review') return; // durante a revisão, tocar no mapa não troca o painel
   sheetFor = target;
   if (target.kind === 'node' && !selSet.has(target.id)) { selSet.clear(); selSet.add(target.id); refreshSel(); }
   renderSheet();
@@ -793,7 +792,13 @@ function keepAboveSheet(id) {
   if (bottom - top < 40 || (sy >= top && sy <= bottom)) return;
   panBy(0, (top + bottom) / 2 - sy);
 }
-function closeSheet() { if (!sheetFor) return; sheetFor = null; renderSheet(); if (selEdge) { selEdge = null; renderGraph(); } }
+function closeSheet() {
+  if (!sheetFor) return;
+  const wasReview = sheetFor.kind === 'review';
+  sheetFor = null; review = wasReview ? null : review;
+  renderSheet();
+  if (selEdge || wasReview) { selEdge = null; renderGraph(); }
+}
 /** Editor da ligação no modo Pesquisa: categoria (4 botões) e, com o exterior, a face. */
 function edgeEditor(e) {
   const ext = model.nodes.find(n => n.exterior);
@@ -806,6 +811,115 @@ function edgeEditor(e) {
       <option value="">—</option>${FACES.map(f => `<option value="${f}" ${e.face === f ? 'selected' : ''}>${f} · ${esc(t('face.' + f))}</option>`).join('')}
     </select></label>` : ''}`;
 }
+/* ---------------- VIZINHANÇA: ESCALA, DETECÇÃO E REVISÃO (F4.3.3) ---------------- */
+/** Tolerâncias em unidades do desenho; sem escala, valores provisórios em unidades. */
+function adjUnits() {
+  const s = model.geo && model.geo.escala_m_por_unidade;
+  return s ? { tol: tolCm / 100 / s, min: minContactCm / 100 / s, scaled: true, s } : { tol: 8, min: 20, scaled: false, s: 0 };
+}
+const fmtLen = v => { const u = adjUnits(); return u.scaled ? `${Math.round(v * u.s * 100)} cm` : `${v.toFixed(1)} u`; };
+const pairKey = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
+const polyList = () => model.nodes.filter(n => n.poly && n.poly.length >= 3).map(n => ({ id: n.id, poly: n.poly }));
+/** Pares que já têm ligação (no modo Simples, só as de passagem contam). */
+const linkedPairs = () => new Set(model.edges.filter(e => researchMode || inLayer(e)).map(e => pairKey(e.a, e.b)));
+function detectNew() {
+  const u = adjUnits(), linked = linkedPairs();
+  const all = detectAdjacency(polyList(), { tol: u.tol, minContact: u.min });
+  return { cands: all.filter(c => !linked.has(pairKey(c.a, c.b))), linked: all.length - all.filter(c => !linked.has(pairKey(c.a, c.b))).length };
+}
+function openReview() {
+  if (polyList().length < 2) { toast(t('toast.needPolys')); return; }
+  if (mode !== 'select') setMode('select');
+  setView('graph');
+  review = null; closeSheet();
+  const { cands, linked } = detectNew();
+  // pré-seleciona certas e prováveis; duvidosas só com confirmação
+  review = { cands, linked, sel: new Set(cands.filter(c => c.confidence !== 'duvidosa').map(c => pairKey(c.a, c.b))), focus: null };
+  sheetFor = { kind: 'review' }; renderSheet(); renderGraph();
+}
+function refreshReview() {
+  const keep = review.sel, { cands, linked } = detectNew();
+  review.cands = cands; review.linked = linked;
+  review.sel = new Set(cands.map(c => pairKey(c.a, c.b)).filter(k => keep.has(k)));
+}
+function reviewHTML(closeBtn) {
+  const u = adjUnits(), n = review.sel.size, kindNew = t('kind.' + (researchMode ? 'opaco' : 'acesso'));
+  const name = id => esc((byId.get(id) || { name: id }).name);
+  let h = `<div class="sheet-handle"></div><div class="sheet-head"><h3>${esc(t('rev.title'))}</h3>${closeBtn}</div>
+    <p class="hint">${esc(u.scaled ? t('rev.scaleInfo', { tol: tolCm, min: minContactCm }) : t('rev.noScale'))}${review.linked ? ' ' + esc(t('rev.linked', { n: review.linked })) : ''}</p>`;
+  if (!review.cands.length) h += `<p>${esc(t('rev.none'))}</p>`;
+  for (const conf of ['certa', 'provavel', 'duvidosa']) {
+    const list = review.cands.filter(c => c.confidence === conf);
+    if (!list.length) continue;
+    h += `<h4 class="revh conf-${conf}">${esc(t('rev.' + conf))} (${list.length})</h4>` + list.map(c => {
+      const k = pairKey(c.a, c.b);
+      return `<div class="revrow conf-${conf}${review.focus === k ? ' focus' : ''}">
+        <input type="checkbox" data-rev="${esc(k)}" ${review.sel.has(k) ? 'checked' : ''} aria-label="${esc(c.a)} ↔ ${esc(c.b)}">
+        <button class="linkish revname" data-revfocus="${esc(k)}"><b>${esc(c.a)} ↔ ${esc(c.b)}</b> <small>${name(c.a)} ↔ ${name(c.b)}</small></button>
+        <span class="mini">${esc(t('rev.contact'))} ${fmtLen(c.contact)} · ${esc(t('rev.gap'))} ${fmtLen(c.gap)}</span>
+        <span class="tag">${esc(t('rev.r.' + c.reason))}</span>
+      </div>`;
+    }).join('');
+  }
+  h += `<div class="sheet-actions">
+      <button class="ghost" data-act="revWeld" ${n ? '' : 'disabled'}>${esc(t('rev.weld', { n }))}</button>
+      <button data-act="revCreate" ${n ? '' : 'disabled'}>${esc(t('rev.create', { n, kind: kindNew }))}</button>
+    </div>`;
+  return h;
+}
+/** Contatos coloridos no mapa: verde contínuo = certa, âmbar tracejado = provável, vermelho pontilhado = duvidosa. */
+function drawReviewOverlay() {
+  const k = pxPerUnit(), STY = { certa: ['#2b7a4b', null], provavel: ['#c98a1a', [8, 5]], duvidosa: ['#b23a2e', [2, 5]] };
+  review.cands.forEach(c => {
+    const key = pairKey(c.a, c.b), on = review.sel.has(key), [col, dash] = STY[c.confidence];
+    c.segs.forEach(([p, q]) => {
+      const a = { x1: p[0], y1: p[1], x2: q[0], y2: q[1], stroke: col, 'stroke-width': (review.focus === key ? 11 : 6) / k, 'stroke-opacity': on ? 0.85 : 0.3, 'stroke-linecap': 'round', 'pointer-events': 'none' };
+      if (dash) a['stroke-dasharray'] = dash.map(d => d / k).join(' ');
+      svgG.appendChild(Eo('line', a));
+    });
+  });
+}
+function focusPair(key) {
+  const c = review && review.cands.find(x => pairKey(x.a, x.b) === key);
+  if (!c) return;
+  review.focus = key;
+  const [p, q] = c.segs[0] || [[byId.get(c.a).x, byId.get(c.a).y], [byId.get(c.b).x, byId.get(c.b).y]];
+  const r = svgG.getBoundingClientRect();
+  placeCam((p[0] + q[0]) / 2, (p[1] + q[1]) / 2, r.left + r.width / 2, r.top + r.height * 0.35, cam.w);
+  renderGraph(); renderSheet();
+}
+/** Fechar frestas dos pares marcados: solda vértices próximos e encosta vértices nas paredes vizinhas. */
+function reviewWeld() {
+  const ids = new Set();
+  review.sel.forEach(k => k.split('\u0000').forEach(i => ids.add(i)));
+  const { polys, moved } = closeGaps(polyList(), ids, adjUnits().tol);
+  if (!moved) { toast(t('rev.nothingToWeld')); return; }
+  const np = new Map(polys.map(p => [p.id, p.poly]));
+  mutate(() => model.nodes.forEach(n => { if (ids.has(n.id) && np.has(n.id)) n.poly = np.get(n.id); }));
+  const bad = [...ids].filter(id => { const n = byId.get(id); return n && n.poly && !isConvex(n.poly); });
+  toast(t('rev.welded', { n: moved }) + (bad.length ? ' ' + t('rev.nonconvex', { ids: bad.join(', ') }) : ''), t('toast.undo'), undo);
+}
+/** Cria as ligações dos pares marcados: opaco no modo Pesquisa (para reclassificar), acesso no Simples. */
+function reviewCreate() {
+  const kind = researchMode ? 'opaco' : 'acesso';
+  const add = review.cands.filter(c => review.sel.has(pairKey(c.a, c.b))).map(c => ({ a: c.a, b: c.b, kind }));
+  review = null; sheetFor = null;
+  mutate(() => model.edges.push(...add));
+  toast(t('rev.created', { n: add.length, kind: t('kind.' + kind) }) + (researchMode ? t('rev.createdResearch') : ''), t('toast.undo'), undo);
+}
+/** Calibração: distância real (m) entre os dois pontos medidos → metros por unidade do desenho. */
+function applyCalibration() {
+  const inp = $('calibM'), m = inp ? parseFloat(String(inp.value).replace(',', '.')) : NaN;
+  if (!(m > 0) || poly.pts.length < 2) { toast(t('toast.calibBad')); return; }
+  const [p, q] = poly.pts, units = Math.hypot(q[0] - p[0], q[1] - p[1]);
+  if (units < 1e-6) { toast(t('toast.calibBad')); return; }
+  const s = m / units;
+  setMode('select');
+  mutate(() => { model.geo = { ...(model.geo || {}), escala_m_por_unidade: s }; });
+  toast(t('toast.calibrated', { n: (1 / s).toFixed(1) }));
+}
+$('sheet').addEventListener('click', e => { const f = e.target.closest('[data-revfocus]'); if (f) focusPair(f.dataset.revfocus); });
+
 /** Legenda das categorias sob o mapa (modo Pesquisa). */
 function renderKindLegend() {
   const el = $('kindLegend');
@@ -819,6 +933,7 @@ function renderSheet() {
   if (sheetFor && sheetFor.kind === 'edge' && !findEdge(sheetFor.key)) sheetFor = null;
   if (!sheetFor) { s.hidden = true; s.innerHTML = ''; return; }
   const closeBtn = `<button class="icon" data-act="close" aria-label="${esc(t('close'))}"><svg class="ico"><use href="#i-close"/></svg></button>`;
+  if (sheetFor.kind === 'review') { s.innerHTML = reviewHTML(closeBtn); s.hidden = false; return; }
   if (sheetFor.kind === 'edge') {
     const e = findEdge(sheetFor.key), na = byId.get(e.a), nb = byId.get(e.b);
     s.innerHTML = `<div class="sheet-handle"></div>
@@ -862,9 +977,15 @@ $('sheet').addEventListener('click', e => {
     case 'delete': armConfirm(b, () => deleteNodes([target.id])); break;
     case 'removeLink': removeEdge(target.key); break;
     case 'setKind': setEdgeKind(target.key, b.dataset.k); break;
+    case 'revWeld': reviewWeld(); break;
+    case 'revCreate': reviewCreate(); break;
   }
 });
 $('sheet').addEventListener('change', e => {
+  if (e.target.dataset && e.target.dataset.rev && review) {
+    if (e.target.checked) review.sel.add(e.target.dataset.rev); else review.sel.delete(e.target.dataset.rev);
+    renderSheet(); renderGraph(); return;
+  }
   if (e.target.id === 'edgeFace' && sheetFor && sheetFor.kind === 'edge') { setEdgeFace(sheetFor.key, e.target.value); return; }
   if (e.target.id === 'sheetLabel' && sheetFor) {
     const lab = e.target.value.trim().slice(0, 60), n = byId.get(sheetFor.id);
@@ -1455,7 +1576,11 @@ document.addEventListener('change', e => {
   layer = e.target.value;
   recompute();
 });
-$('btnDerive').addEventListener('click', deriveAdjacency);
+$('btnDerive').addEventListener('click', openReview);
+$('btnCalib').addEventListener('click', () => { setView('graph'); setMode('measure'); });
+$('optTol').addEventListener('change', e => { tolCm = clamp(parseFloat(e.target.value) || 15, 0.5, 500); autosave(); if (review) { refreshReview(); renderSheet(); renderGraph(); } renderPanel(); });
+$('optMinContact').addEventListener('change', e => { minContactCm = clamp(parseFloat(e.target.value) || 30, 1, 2000); autosave(); if (review) { refreshReview(); renderSheet(); renderGraph(); } renderPanel(); });
+$('ctxBar').addEventListener('keydown', e => { if (e.target.id === 'calibM' && e.key === 'Enter') applyCalibration(); });
 
 $('bgFile').addEventListener('change', e => {
   const f = e.target.files && e.target.files[0];
@@ -1525,7 +1650,8 @@ document.addEventListener('keydown', e => {
   if (k === 'r' && selSet.size === 1) setRoot([...selSet][0]);
   if (e.key === 'Enter' && mode === 'poly') finishPoly();
   if (e.key === 'Escape') {
-    if (mode === 'poly' && poly.pts.length) cancelPoly();
+    if (mode === 'measure') setMode('select');
+    else if (mode === 'poly' && poly.pts.length) cancelPoly();
     else if (linkFrom) cancelLink();
     else clearSelection();
   }

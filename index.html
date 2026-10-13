@@ -120,6 +120,9 @@
 
     <details class="grp">
       <summary data-i18n="grp.convex"></summary>
+      <div class="row"><span class="lbl" data-i18n="scale"></span><span id="scaleTxt" class="mini" style="flex:1"></span><button class="ghost" id="btnCalib" data-i18n="btn.calib"></button></div>
+      <div class="row"><span class="lbl" data-i18n="opt.tol"></span><input type="number" id="optTol" min="0.5" max="500" step="1" inputmode="decimal"><span class="mini">cm</span></div>
+      <div class="row"><span class="lbl" data-i18n="opt.minContact"></span><input type="number" id="optMinContact" min="1" max="2000" step="1" inputmode="decimal"><span class="mini">cm</span></div>
       <div class="btnrow"><button class="ghost" id="btnDerive" data-i18n="btn.derive"></button></div>
       <p class="hint" data-i18n="hint.convex"></p>
     </details>
