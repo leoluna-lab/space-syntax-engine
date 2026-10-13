@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, layerInput, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -43,9 +43,12 @@ const histBy = new Map(); // histórico de desfazer por cenário
 const svgG = $('svgGraph'), svgJ = $('svgJ'), tip = $('tip');
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const snapV = v => (snap ? Math.round(v / gridSize) * gridSize : Math.round(v * 10) / 10);
-const sameEdge = (e, a, b) => (e[0] === a && e[1] === b) || (e[0] === b && e[1] === a);
+// Ligações v3: {a, b, kind, face?}. A seleção guarda a chave (par + face), única por modelo.
+const findEdge = key => model.edges.find(e => edgeKey(e) === key);
+const isPermeable = e => e.kind === 'acesso' || e.kind === 'aberto';
 
-function analyse(m) { return runAnalysis(m, { ...conv, radius }); }
+let layer = 'acesso'; // camada analisada (F4.2 traz o seletor)
+function analyse(m, r = radius) { return runAnalysis(layerInput(m, layer), { ...conv, radius: r }); }
 const activeScenario = () => project.scenarios.find(s => s.id === project.activeId);
 function setModel(m) { model = m; activeScenario().model = m; }
 
@@ -128,16 +131,16 @@ function labelInk(hsl) { const m = /hsl\((\d+)/.exec(hsl); if (!m) return C.ink;
 function recompute() {
   byId = new Map(model.nodes.map(n => [n.id, n]));
   const seen = new Set();
-  model.edges = model.edges.filter(([a, b]) => {
-    if (a === b || !byId.has(a) || !byId.has(b)) return false;
-    const k = a < b ? a + '\u0000' + b : b + '\u0000' + a;
+  model.edges = model.edges.filter(e => {
+    if (e.a === e.b || !byId.has(e.a) || !byId.has(e.b)) return false;
+    const k = edgeKey(e);
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   });
   if (!byId.has(model.root)) model.root = model.nodes.length ? model.nodes[0].id : null;
   [...selSet].forEach(id => { if (!byId.has(id)) selSet.delete(id); });
-  if (selEdge && !model.edges.some(e => sameEdge(e, selEdge[0], selEdge[1]))) selEdge = null;
+  if (selEdge && !findEdge(selEdge)) selEdge = null;
   if (linkFrom && !byId.has(linkFrom)) linkFrom = null;
   R = analyse(model);
   renderAll();
@@ -169,8 +172,8 @@ function renderPanel() {
   $('nCount').textContent = '(' + model.nodes.length + ')';
   $('eCount').textContent = '(' + model.edges.length + ')';
   $('edgeList').innerHTML = model.edges.map((e, i) => `
-    <div class="li${selEdge && sameEdge(e, selEdge[0], selEdge[1]) ? ' sel' : ''}">
-      <button class="nm" data-edge="${i}">${esc(e[0])} ↔ ${esc(e[1])}</button>
+    <div class="li${selEdge === edgeKey(e) ? ' sel' : ''}">
+      <button class="nm" data-edge="${i}">${esc(e.a)} ↔ ${esc(e.b)}${edgeTag(e)}</button>
       <button class="danger" data-dele="${i}" aria-label="${esc(t('act.removeLink'))}">×</button>
     </div>`).join('');
   fillSel($('rootSel'), model.root); fillSel($('edgeA')); fillSel($('edgeB'));
@@ -185,6 +188,11 @@ function renderPanel() {
   const labs = new Set(t('label.presets').split('|'));
   project.scenarios.forEach(sc => sc.model.nodes.forEach(n => { if (n.label) labs.add(n.label); }));
   $('labelOptions').innerHTML = [...labs].map(l => `<option value="${esc(l)}"></option>`).join('');
+}
+/** Categoria e face, quando fogem do padrão (acesso, sem face). */
+function edgeTag(e) {
+  if (e.kind === 'acesso' && !e.face) return '';
+  return ` <span class="mini">${esc(t('kind.' + e.kind))}${e.face ? ' · ' + e.face : ''}</span>`;
 }
 function fillSel(sel, val) {
   const keep = sel.value;
@@ -261,14 +269,14 @@ function renderGraph() {
     const pg = Eo('polygon', { points: n.poly.map(p => p.join(',')).join(' '), fill: col, 'fill-opacity': 0.22, stroke: col, 'stroke-width': 1.4, 'stroke-opacity': 0.7 });
     svgG.appendChild(pg); polyEls[n.id] = pg;
   });
-  model.edges.forEach(([a, b]) => {
-    const pa = byId.get(a), pb = byId.get(b);
-    const sel = selEdge && sameEdge([a, b], selEdge[0], selEdge[1]);
-    const ln = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': 1.6, 'stroke-opacity': 0.55, class: 'edge' + (sel ? ' seledge' : '') });
+  model.edges.forEach(e => {
+    const pa = byId.get(e.a), pb = byId.get(e.b), key = edgeKey(e), perm = isPermeable(e);
+    // F4.1: ligações que não são passagem (opaco, vista) ficam pontilhadas e claras para não serem lidas como portas
+    const ln = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': perm ? 1.6 : 1.2, 'stroke-opacity': perm ? 0.55 : 0.35, 'stroke-dasharray': perm ? '' : '2 4', class: 'edge' + (selEdge === key ? ' seledge' : '') });
     const hit = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: 'transparent', 'stroke-width': 12, class: 'edgehit' });
-    hit.dataset.a = a; hit.dataset.b = b;
+    hit.dataset.key = key;
     svgG.appendChild(ln); svgG.appendChild(hit);
-    edgeEls.push({ a, b, ln, hit });
+    edgeEls.push({ a: e.a, b: e.b, ln, hit });
   });
   const m = meta(currentMeasure);
   model.nodes.forEach(n => {
@@ -361,7 +369,7 @@ svgG.addEventListener('pointerdown', e => {
   if (e.button === 1 || e.altKey) { gesture = { ...g, type: 'pan' }; return; }
   if (mode === 'select') {
     if (id) { startNodeDrag(g, id, e.shiftKey); return; }
-    if (edgeEl) { gesture = { ...g, type: 'edge', a: edgeEl.dataset.a, b: edgeEl.dataset.b }; return; }
+    if (edgeEl) { gesture = { ...g, type: 'edge', key: edgeEl.dataset.key }; return; }
     if (!g.touch) {
       boxEl = Eo('rect', { x: pt.x, y: pt.y, width: 0, height: 0, fill: 'rgba(178,58,46,.08)', stroke: C.accent, 'stroke-width': 0.8, 'stroke-dasharray': '4 3' });
       svgG.appendChild(boxEl);
@@ -436,7 +444,7 @@ function endPointer(e, cancelled) {
   }
   if (cancelled || g.moved) return;
   switch (g.type) {
-    case 'edge': selectEdge(g.a, g.b); break;
+    case 'edge': selectEdge(g.key); break;
     case 'panTap':
       if (mode === 'link') cancelLink();
       else if (mode === 'select' && !multi) clearSelection();
@@ -507,11 +515,11 @@ function addNodeAt(x, y, name) {
 }
 function addEdge(a, b) {
   if (!a || !b || a === b) return;
-  if (model.edges.some(e => sameEdge(e, a, b))) { toast(t('toast.linkExists')); return; }
-  mutate(() => model.edges.push([a, b]));
+  if (model.edges.some(e => edgeKey(e) === edgeKey({ a, b }))) { toast(t('toast.linkExists')); return; }
+  mutate(() => model.edges.push({ a, b, kind: 'acesso' }));
 }
-function removeEdge(a, b) {
-  mutate(() => { model.edges = model.edges.filter(e => !sameEdge(e, a, b)); });
+function removeEdge(key) {
+  mutate(() => { model.edges = model.edges.filter(e => edgeKey(e) !== key); });
   selEdge = null; closeSheet();
   toast(t('toast.linkRemoved'), t('toast.undo'), undo);
 }
@@ -524,7 +532,7 @@ function deleteNodes(ids) {
 }
 function setRoot(id) { mutate(() => { model.root = id; }); }
 function clearSelection() { selSet.clear(); selEdge = null; multi = false; closeSheet(); renderGraph(); refreshSel(); }
-function selectEdge(a, b) { selSet.clear(); multi = false; selEdge = [a, b]; renderGraph(); refreshSel(); openSheet({ kind: 'edge', a, b }); }
+function selectEdge(key) { selSet.clear(); multi = false; selEdge = key; renderGraph(); refreshSel(); openSheet({ kind: 'edge', key }); }
 
 function linkClick(id) {
   if (!linkFrom) { linkFrom = id; refreshSel(); return; }
@@ -604,7 +612,7 @@ function deriveAdjacency() {
   const found = [];
   for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
     const A = ps[i], B = ps[j];
-    if (polysShareEdge(A.poly, B.poly, 8) && !model.edges.some(e => sameEdge(e, A.id, B.id))) found.push([A.id, B.id]);
+    if (polysShareEdge(A.poly, B.poly, 8) && !model.edges.some(e => edgeKey(e) === edgeKey({ a: A.id, b: B.id }))) found.push({ a: A.id, b: B.id, kind: 'acesso' });
   }
   if (found.length) mutate(() => model.edges.push(...found));
   toast(found.length ? t('toast.derived', { n: found.length }) : t('toast.noDerived'));
@@ -678,14 +686,14 @@ function closeSheet() { if (!sheetFor) return; sheetFor = null; renderSheet(); i
 function renderSheet() {
   const s = $('sheet');
   if (sheetFor && sheetFor.kind === 'node' && !byId.has(sheetFor.id)) sheetFor = null;
-  if (sheetFor && sheetFor.kind === 'edge' && !model.edges.some(e => sameEdge(e, sheetFor.a, sheetFor.b))) sheetFor = null;
+  if (sheetFor && sheetFor.kind === 'edge' && !findEdge(sheetFor.key)) sheetFor = null;
   if (!sheetFor) { s.hidden = true; s.innerHTML = ''; return; }
   const closeBtn = `<button class="icon" data-act="close" aria-label="${esc(t('close'))}"><svg class="ico"><use href="#i-close"/></svg></button>`;
   if (sheetFor.kind === 'edge') {
-    const { a, b } = sheetFor, na = byId.get(a), nb = byId.get(b);
+    const e = findEdge(sheetFor.key), na = byId.get(e.a), nb = byId.get(e.b);
     s.innerHTML = `<div class="sheet-handle"></div>
-      <div class="sheet-head"><h3>${esc(t('edge.title'))}: ${esc(a)} ↔ ${esc(b)}</h3>${closeBtn}</div>
-      <p class="hint">${esc(na.name)} ↔ ${esc(nb.name)}</p>
+      <div class="sheet-head"><h3>${esc(t('edge.title'))}: ${esc(e.a)} ↔ ${esc(e.b)}</h3>${closeBtn}</div>
+      <p class="hint">${esc(na.name)} ↔ ${esc(nb.name)} · ${esc(t('kind.' + e.kind))}${e.face ? ' · ' + esc(t('edge.face')) + ' ' + e.face : ''}</p>
       <div class="sheet-actions"><button class="danger" data-act="removeLink"><svg class="ico"><use href="#i-trash"/></svg>${esc(t('act.removeLink'))}</button></div>`;
   } else {
     const n = byId.get(sheetFor.id), p = R.per[n.id], isRoot = n.id === model.root;
@@ -720,7 +728,7 @@ $('sheet').addEventListener('click', e => {
     case 'root': setRoot(target.id); break;
     case 'link': setView('graph'); setMode('link'); linkFrom = target.id; closeSheet(); refreshSel(); break;
     case 'delete': armConfirm(b, () => deleteNodes([target.id])); break;
-    case 'removeLink': removeEdge(target.a, target.b); break;
+    case 'removeLink': removeEdge(target.key); break;
   }
 });
 $('sheet').addEventListener('change', e => {
@@ -794,14 +802,15 @@ function drawJGraph(svg, m, Rx, sel = new Set()) {
   }
   // arestas da árvore de busca em largura a partir da raiz; as demais (anéis) tracejadas
   const adj = new Map(m.nodes.map(n => [n.id, []]));
-  m.edges.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
+  const pairs = layerInput(m, layer).edges;
+  pairs.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
   const key = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
   const tree = new Set();
   if (m.root && adj.has(m.root)) {
     const seen = new Set([m.root]), q = [m.root];
     for (let h = 0; h < q.length; h++) for (const w of adj.get(q[h])) if (!seen.has(w)) { seen.add(w); tree.add(key(q[h], w)); q.push(w); }
   }
-  m.edges.forEach(([a, b]) => {
+  pairs.forEach(([a, b]) => {
     if (!pj[a] || !pj[b]) return;
     const isTree = tree.has(key(a, b));
     svg.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: isTree ? C.wall : C.accent, 'stroke-width': isTree ? 1.8 : 1.2, 'stroke-dasharray': isTree ? '' : '5 3', 'stroke-opacity': isTree ? 0.9 : 0.7 }));
@@ -910,7 +919,7 @@ function pickFromResults(e) {
 $('resTable').querySelector('tbody').addEventListener('click', pickFromResults);
 $('spaceCards').addEventListener('click', pickFromResults);
 /** Resultado global (raio 0) — o genótipo e o H* entre funções são propriedades da configuração inteira. */
-const globalOf = (m, Rx) => (radius === 0 ? Rx : runAnalysis(m, { ...conv, radius: 0 }));
+const globalOf = (m, Rx) => (radius === 0 ? Rx : analyse(m, 0));
 function renderFunctional() {
   const box = $('funcBox');
   const F = functionalSummary(model, globalOf(model, R));
@@ -969,7 +978,7 @@ function duplicateScenario() {
 /** Novo cenário em branco = outro projeto (família própria), começa só com o exterior. */
 function newScenario() {
   const id = newScenarioId(project.scenarios.map(x => x.id));
-  const m = migrateModel({ nodes: [{ id: 'X', name: t('scn.exterior'), x: W0 / 2, y: H0 - 60, label: t('scn.exterior') }], edges: [], root: 'X' });
+  const m = migrateModel({ nodes: [{ id: 'X', name: t('scn.exterior'), x: W0 / 2, y: H0 - 60, label: t('scn.exterior'), exterior: true }], edges: [], root: 'X' });
   addScenario({ id, name: t('scn.default', { n: project.scenarios.length + 1 }), family: id, model: m });
 }
 function deleteScenario(id) {
@@ -1029,7 +1038,7 @@ function drawMiniMap(svg, m, Rx, colour) {
     const c = colour(n.id);
     svg.appendChild(Eo('polygon', { points: n.poly.map(p => p.join(',')).join(' '), fill: c, 'fill-opacity': 0.22, stroke: c, 'stroke-width': 1.2 * k }));
   });
-  m.edges.forEach(([a, b2]) => {
+  layerInput(m, layer).edges.forEach(([a, b2]) => {
     const A = pos.get(a), B = pos.get(b2);
     svg.appendChild(Eo('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, stroke: C.wall, 'stroke-width': 1.4 * k, 'stroke-opacity': 0.55 }));
   });
@@ -1266,7 +1275,7 @@ $('edgeList').addEventListener('click', e => {
   const i = del ? +del.dataset.dele : open ? +open.dataset.edge : -1;
   const ed = model.edges[i];
   if (!ed) return;
-  if (del) removeEdge(ed[0], ed[1]); else selectEdge(ed[0], ed[1]);
+  if (del) removeEdge(edgeKey(ed)); else selectEdge(edgeKey(ed));
 });
 $('addEdge').addEventListener('click', () => addEdge($('edgeA').value, $('edgeB').value));
 $('rootSel').addEventListener('change', e => setRoot(e.target.value));
@@ -1305,8 +1314,9 @@ $('btnLoad').addEventListener('click', () => {
     const data = JSON.parse($('io').value);
     w.hidden = true;
     if (data && typeof data === 'object' && 'scenarios' in data) { importScenarios(migrateProject(data)); return; }
-    const m = migrateModel(data);
+    const { model: m, warnings } = migrateModelWithReport(data);
     const pre = snapshot(); setModel(m); selSet.clear(); commit(pre); recompute(); fitView();
+    if (warnings.length) { w.hidden = false; w.textContent = '⚠ ' + warnings.join(' '); }
   } catch (err) {
     w.hidden = false;
     w.textContent = '⚠ ' + (err instanceof SyntaxError ? t('err.json') : err.message) + ' ' + t('err.expect');
@@ -1335,7 +1345,7 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (selSet.size) { e.preventDefault(); deleteNodes([...selSet]); }
-    else if (selEdge) { e.preventDefault(); removeEdge(selEdge[0], selEdge[1]); }
+    else if (selEdge) { e.preventDefault(); removeEdge(selEdge); }
     return;
   }
   if (k === 'n') addNodeAt(lastMouse.x, lastMouse.y);

@@ -1,0 +1,6 @@
+{
+  "schema": 3,
+  "nodes": [{ "id": "a", "name": "Espaço único", "x": 0, "y": 0 }],
+  "edges": [],
+  "root": "a"
+}

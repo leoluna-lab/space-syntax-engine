@@ -2,6 +2,7 @@
 const DICT = {
   pt: {
     'brand.sub': 'Configuração convexa · Hillier & Hanson',
+    'kind.opaco': 'opaco', 'kind.vista': 'vista', 'kind.acesso': 'acesso', 'kind.aberto': 'aberto', 'edge.face': 'face',
     'grp.scn': 'Cenários', 'scn.rename': 'Nome', 'scn.dup': 'Duplicar', 'scn.new': 'Novo em branco', 'scn.select': 'Cenário ativo',
     'scn.default': 'Cenário {n}', 'scn.copyOf': '{name} (cópia)', 'scn.exterior': 'Exterior',
     'hint.scn': 'Duplicar cria uma variação do mesmo projeto (espaços comparados pelo id). "Novo em branco" é outro projeto (comparado por nome e função).',
@@ -90,6 +91,7 @@ const DICT = {
   },
   en: {
     'brand.sub': 'Convex configuration · Hillier & Hanson',
+    'kind.opaco': 'opaque', 'kind.vista': 'view', 'kind.acesso': 'access', 'kind.aberto': 'open', 'edge.face': 'face',
     'grp.scn': 'Scenarios', 'scn.rename': 'Name', 'scn.dup': 'Duplicate', 'scn.new': 'New blank', 'scn.select': 'Active scenario',
     'scn.default': 'Scenario {n}', 'scn.copyOf': '{name} (copy)', 'scn.exterior': 'Exterior',
     'hint.scn': 'Duplicate creates a variation of the same project (spaces compared by id). "New blank" is another project (compared by name and function).',

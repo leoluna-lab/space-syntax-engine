@@ -4,7 +4,12 @@
  * Fórmulas e convenções: ver .claude/skills/space-syntax-teoria/references/medidas.md.
  * Padrão = compatível com depthmapX 0.9.1 (salalib/axialmodules/axialintegration.cpp).
  */
-import type { Model } from './model';
+/** Entrada do motor: só a topologia (pares [a,b]). Ligações v3 com categoria passam antes por `layerEdges`. */
+export interface AnalysisInput {
+  nodes: { id: string }[];
+  edges: [string, string][];
+  root: string | null;
+}
 import { biconnectedBlocks, bfs, brandes, buildGraph, countComponents, degree, pearson } from './graph';
 
 export type SpaceType = 'a' | 'b' | 'c' | 'd';
@@ -139,7 +144,7 @@ export function differenceFactor(values: number[]): { H: number; Hs: number } | 
 const mean = (xs: number[]): number | null => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const nonNull = (xs: (number | null)[]): number[] => xs.filter((v): v is number => v !== null);
 
-export function analyse(model: Pick<Model, 'nodes' | 'edges' | 'root'>, opts: Partial<AnalysisOptions> = {}): AnalysisResult {
+export function analyse(model: AnalysisInput, opts: Partial<AnalysisOptions> = {}): AnalysisResult {
   const options: AnalysisOptions = { ...DEFAULT_OPTIONS, ...opts };
   const radius = Math.max(0, Math.floor(options.radius || 0));
   const ids = model.nodes.map(n => n.id);

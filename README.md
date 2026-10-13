@@ -25,6 +25,13 @@ src/util/html.ts      escape de texto do usuário
 tests/                testes (Vitest): modelo validado de 10 nós + grafos canônicos
 ```
 
+## Formato de dados (schema 3, modo pesquisa)
+- Ligações são objetos `{a, b, kind, face?}`, com `kind` ∈ {opaco, vista, acesso, aberto}. A `face` (N, S, L, O) só existe em ligações com o nó `exterior`.
+- **Unicidade:** uma ligação por par entre espaços interiores; uma por par **e por face** com o exterior (um cômodo de canto pode abrir para duas faces).
+- **Camadas analisadas:** acesso = {acesso, aberto}; visual = {vista, acesso, aberto}; adjacência = todas. O motor recebe só os pares da camada (`layerInput`).
+- Arquivos v1/v2 continuam abrindo: cada `[a,b]` vira `{a, b, kind: "acesso"}`, e a análise sai idêntica.
+- Especificação em `public/schema/v3.json` (JSON Schema draft-07), com exemplos em `public/schema/examples/`. É o mesmo arquivo usado pelo validador Python da pesquisa.
+
 ## Convenções (padrão = depthmapX 0.9.1)
 - **Entropia:** `p_d = n_d/k` incluindo o próprio espaço em d=0 (`axialintegration.cpp`). Opção: convenção v1 `n_d/(k−1)`.
 - **Fator de diferença H\*:** tripla (máx, média, mín) de **RA** (Hillier, Hanson & Graham 1987). Opção: sobre integração (v1).

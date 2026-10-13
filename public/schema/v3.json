@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://leoluna-lab.github.io/space-syntax-engine/schema/v3.json",
+  "title": "Space Syntax Engine — modelo convexo, schema 3 (modo pesquisa)",
+  "description": "Um exemplar (planta) codificado como grafo de espaços convexos. Lido pelo app web e pelo validador Python. Regras que o JSON Schema não expressa e que o validador do app (migrateModel) aplica: (1) no máximo um nó com exterior=true; (2) 'face' só em ligações que tocam o nó exterior; (3) 'a' e 'b' devem ser ids existentes e diferentes; (4) unicidade: uma ligação por par entre interiores, uma por par e por face com o exterior; (5) ligação com o exterior sem face gera aviso, não erro.",
+  "type": "object",
+  "required": ["schema", "nodes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": 3 },
+    "nodes": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": { "$ref": "#/definitions/node" }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": { "$ref": "#/definitions/edge" }
+    },
+    "root": {
+      "description": "Id do espaço raiz (portador). Padrão: o nó exterior, se houver.",
+      "type": ["string", "null"]
+    },
+    "geo": { "$ref": "#/definitions/geo" },
+    "meta": { "$ref": "#/definitions/meta" }
+  },
+  "definitions": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "node": {
+      "type": "object",
+      "required": ["id", "name", "x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "name": { "type": "string", "maxLength": 200 },
+        "x": { "type": "number", "description": "Posição do nó no desenho (unidades do canvas)." },
+        "y": { "type": "number", "description": "Posição do nó no desenho; y cresce para baixo." },
+        "poly": {
+          "description": "Polígono convexo do espaço, em unidades do canvas.",
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 500,
+          "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+        },
+        "label": { "type": "string", "maxLength": 60, "description": "Função do espaço (estar, cozinha, varanda…)." },
+        "exterior": { "const": true, "description": "Marca o portador (exterior). No máximo um por modelo." }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["a", "b", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "a": { "$ref": "#/definitions/id" },
+        "b": { "$ref": "#/definitions/id" },
+        "kind": {
+          "description": "Categoria da interface: opaco (parede cega), vista (permeável à vista), acesso (porta), aberto (totalmente aberto).",
+          "enum": ["opaco", "vista", "acesso", "aberto"]
+        },
+        "face": {
+          "description": "Face da envoltória (Norte, Sul, Leste, Oeste). Só em ligações com o nó exterior.",
+          "enum": ["N", "S", "L", "O"]
+        }
+      }
+    },
+    "geo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "norte_graus": { "type": "number", "description": "Direção do norte em graus, sentido horário a partir do 'para cima' do desenho." },
+        "escala_m_por_unidade": { "type": "number", "exclusiveMinimum": 0 },
+        "modulo_m": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "exemplar_id": { "type": "string", "maxLength": 300 },
+        "conjunto": { "enum": ["definicao", "validacao", "sintetico"] },
+        "fonte": { "type": "string", "maxLength": 300 },
+        "local": { "type": "string", "maxLength": 300 },
+        "data": { "type": "string", "maxLength": 300 },
+        "codificador": { "type": "string", "maxLength": 300 },
+        "notas": { "type": "string", "maxLength": 4000 }
+      }
+    }
+  }
+}
