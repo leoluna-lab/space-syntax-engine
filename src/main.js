@@ -2,6 +2,7 @@ import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, 
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
+import { snapPoint, sharedWall } from './geometry/snap.ts';
 
 const $ = id => document.getElementById(id);
 const MONO = 'Menlo, Consolas, Courier New, monospace';
@@ -33,7 +34,8 @@ let bg = { img: null, op: 0.5, rot: 0, scale: 1, dx: 0, dy: 0 };
 let mode = 'select', view = 'graph';
 let selSet = new Set(), selEdge = null, multi = false, sheetFor = null;
 let linkFrom = null;
-const poly = { pts: [], cursor: null };
+// snap: onde o próximo ponto vai grudar (ímã); wall: lado vizinho tocado no 1º ponto (parede compartilhada)
+const poly = { pts: [], cursor: null, snap: null, wall: null };
 let cam = { x: 0, y: 0, w: W0, h: H0 };
 let sortKey = 'integ', sortDir = -1;
 let lastMouse = { x: W0 / 2, y: H0 / 2 }, lastPointerType = 'mouse';
@@ -350,7 +352,7 @@ function renderGraph() {
     if (showValues) g.appendChild(txt(0, -rad - 6, FMT[m.key](valOf(n.id, m.key)), 10, C.accent, '700', 't-val'));
     svgG.appendChild(g); nodeEls[n.id] = g;
   });
-  if (mode === 'poly' && poly.pts.length) drawPolyPreview();
+  if (mode === 'poly' && (poly.pts.length || poly.cursor)) drawPolyPreview();
   const [mn, mx] = measureRange(currentMeasure), f = FMT[m.key];
   $('legLo').textContent = t('legend.seg') + ' · ' + f(m.invert ? mx : mn);
   $('legHi').textContent = f(m.invert ? mn : mx) + ' · ' + t('legend.int');
@@ -433,7 +435,7 @@ svgG.addEventListener('pointerdown', e => {
   }
   if (mode === 'link') { gesture = { ...g, type: id ? 'linkNode' : 'panTap', id }; return; }
   if (mode === 'add') { gesture = { ...g, type: id ? 'nodeTap' : 'addTap', id }; return; }
-  if (mode === 'poly') { gesture = { ...g, type: 'polyTap' }; }
+  if (mode === 'poly') { gesture = { ...g, type: 'polyPlace' }; previewSnap(pt); }
 });
 
 function startNodeDrag(g, id, shift) {
@@ -470,6 +472,7 @@ svgG.addEventListener('pointermove', e => {
   }
   const thr = gesture.touch ? 8 : 3;
   if (!gesture.moved && Math.hypot(e.clientX - gesture.x0, e.clientY - gesture.y0) > thr) { gesture.moved = true; clearTimeout(gesture.lp); }
+  if (gesture.type === 'polyPlace') { previewSnap(pt); return; }
   if (!gesture.moved) return;
   if (gesture.type === 'drag') dragTo(pt);
   else if (gesture.type === 'box') updateBox(pt);
@@ -494,6 +497,12 @@ function endPointer(e, cancelled) {
     } else openSheet({ kind: 'node', id: g.id });
     return;
   }
+  if (g.type === 'polyPlace') {
+    if (cancelled) { poly.snap = null; poly.cursor = null; drawPolyPreview(); return; }
+    polyAddPoint(poly.snap || polySnap(clientToWorld(e.clientX, e.clientY)));
+    if (g.touch) { poly.cursor = null; poly.snap = null; drawPolyPreview(); }
+    return;
+  }
   if (cancelled || g.moved) return;
   switch (g.type) {
     case 'edge': selectEdge(g.key); break;
@@ -504,7 +513,6 @@ function endPointer(e, cancelled) {
     case 'addTap': addNodeAt(g.pt.x, g.pt.y); break;
     case 'nodeTap': selSet.clear(); selSet.add(g.id); refreshSel(); openSheet({ kind: 'node', id: g.id }); break;
     case 'linkNode': linkClick(g.id); break;
-    case 'polyTap': polyAddPoint(g.pt, g.x0, g.y0); break;
   }
 }
 svgG.addEventListener('pointerup', e => endPointer(e, false));
@@ -550,7 +558,7 @@ function hoverPreview(pt) {
     if (!pendingLine) { pendingLine = Eo('line', { stroke: C.accent, 'stroke-width': 1.4, 'stroke-dasharray': '4 3', 'pointer-events': 'none' }); svgG.appendChild(pendingLine); }
     pendingLine.setAttribute('x1', a.x); pendingLine.setAttribute('y1', a.y); pendingLine.setAttribute('x2', pt.x); pendingLine.setAttribute('y2', pt.y);
   }
-  if (mode === 'poly' && poly.pts.length) { poly.cursor = [pt.x, pt.y]; drawPolyPreview(); }
+  if (mode === 'poly') previewSnap(pt);
 }
 
 /* ---------------- EDIÇÃO ---------------- */
@@ -614,22 +622,50 @@ function linkClick(id) {
 function cancelLink() { linkFrom = null; if (pendingLine) { pendingLine.remove(); pendingLine = null; } refreshSel(); }
 
 /* polígonos convexos */
-function polyAddPoint(pt, cx, cy) {
+/** Ímã: gruda em vértices e lados dos polígonos existentes; senão, grade (se ligada) ou ponto livre. */
+function polySnap(pt) {
+  const r = (lastPointerType === 'mouse' ? 10 : 18) / pxPerUnit();
+  const targets = model.nodes.filter(n => n.poly && n.poly.length >= 3).map(n => ({ owner: n.id, poly: n.poly }));
+  const res = snapPoint([pt.x, pt.y], targets, r);
+  if (res.kind === 'none') res.p = [snapV(pt.x), snapV(pt.y)];
+  return res;
+}
+function previewSnap(pt) { poly.snap = polySnap(pt); poly.cursor = poly.snap.p; drawPolyPreview(); }
+function polyAddPoint(res) {
+  const p = res.p;
   if (poly.pts.length >= 3) {
     const f = poly.pts[0], ctm = svgG.getScreenCTM();
-    const sx = f[0] * ctm.a + ctm.e, sy = f[1] * ctm.d + ctm.f;
-    if (Math.hypot(sx - cx, sy - cy) < 22) { finishPoly(); return; }
+    const dx = (f[0] - p[0]) * ctm.a, dy = (f[1] - p[1]) * ctm.d;
+    if (Math.hypot(dx, dy) < 22) { finishPoly(); return; }
   }
-  poly.pts.push([snapV(pt.x), snapV(pt.y)]);
+  // 1º ponto sobre o lado de um vizinho: oferece usar a parede inteira
+  poly.wall = !poly.pts.length && res.kind === 'edge' ? res.seg : null;
+  poly.pts.push([p[0], p[1]]);
+  drawPolyPreview(); renderCtx();
+}
+/** Parede compartilhada: troca o 1º ponto pelos dois vértices do lado vizinho (na ordem inversa). */
+function useSharedWall() {
+  if (!poly.wall || poly.pts.length !== 1) return;
+  poly.pts = sharedWall(poly.wall);
+  poly.wall = null;
   drawPolyPreview(); renderCtx();
 }
 function drawPolyPreview() {
   if (polyPreview) polyPreview.remove();
   polyPreview = null;
-  if (!poly.pts.length) return;
+  if (mode !== 'poly' || (!poly.pts.length && !poly.cursor)) return;
   const k = pxPerUnit(), g = Eo('g', { 'pointer-events': 'none' });
   const pts = poly.cursor ? [...poly.pts, poly.cursor] : poly.pts;
-  g.appendChild(Eo('polyline', { points: pts.map(p => p.join(',')).join(' '), fill: 'rgba(178,58,46,.08)', stroke: C.accent, 'stroke-width': 1.6 / k * 1.2 }));
+  // indicador do ímã: círculo = vértice; losango + lado destacado = parede
+  const s = poly.snap, blue = '#2f5d8a';
+  if (s && s.kind === 'edge') {
+    g.appendChild(Eo('line', { x1: s.seg[0][0], y1: s.seg[0][1], x2: s.seg[1][0], y2: s.seg[1][1], stroke: blue, 'stroke-width': 4 / k, 'stroke-opacity': 0.45 }));
+    const d = 7 / k;
+    g.appendChild(Eo('polygon', { points: `${s.p[0]},${s.p[1] - d} ${s.p[0] + d},${s.p[1]} ${s.p[0]},${s.p[1] + d} ${s.p[0] - d},${s.p[1]}`, fill: '#fff', stroke: blue, 'stroke-width': 2 / k }));
+  } else if (s && s.kind === 'vertex') {
+    g.appendChild(Eo('circle', { cx: s.p[0], cy: s.p[1], r: 8 / k, fill: 'none', stroke: blue, 'stroke-width': 2.2 / k }));
+  }
+  if (pts.length > 1) g.appendChild(Eo('polyline', { points: pts.map(p => p.join(',')).join(' '), fill: 'rgba(178,58,46,.08)', stroke: C.accent, 'stroke-width': 1.6 / k * 1.2 }));
   poly.pts.forEach((p, i) => g.appendChild(Eo('circle', { cx: p[0], cy: p[1], r: (i === 0 && poly.pts.length >= 3 ? 9 : 4.5) / k, fill: i === 0 ? C.accent : '#fff', stroke: C.accent, 'stroke-width': 1.5 / k })));
   svgG.appendChild(g); polyPreview = g;
 }
@@ -652,11 +688,11 @@ function finishPoly() {
   const pts = poly.pts.slice();
   const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length, cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
   const id = nextId();
-  poly.pts = []; poly.cursor = null;
+  poly.pts = []; poly.cursor = null; poly.snap = null; poly.wall = null;
   mutate(() => model.nodes.push({ id, name: t('newSpace', { n: model.nodes.length + 1 }), x: Math.round(cx), y: Math.round(cy), poly: pts }));
   if (!isConvex(pts)) toast(t('toast.nonconvex'));
 }
-function cancelPoly() { poly.pts = []; poly.cursor = null; drawPolyPreview(); renderCtx(); }
+function cancelPoly() { poly.pts = []; poly.cursor = null; poly.snap = null; poly.wall = null; drawPolyPreview(); renderCtx(); }
 
 function segOverlap(a1, a2, b1, b2, tol) {
   const dax = a2[0] - a1[0], day = a2[1] - a1[1], len = Math.hypot(dax, day);
@@ -689,7 +725,7 @@ function deriveAdjacency() {
 
 /* ---------------- MODO E BARRA DE CONTEXTO ---------------- */
 function setMode(m) {
-  mode = m; linkFrom = null; poly.pts = []; poly.cursor = null; multi = false;
+  mode = m; linkFrom = null; poly.pts = []; poly.cursor = null; poly.snap = null; poly.wall = null; multi = false;
   document.querySelectorAll('.modebtn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   renderGraph(); renderCtx();
 }
@@ -701,7 +737,9 @@ function renderCtx() {
     (linkFrom ? `<button data-ctx="cancelLink">${t('btn.cancel')}</button>` : '');
   else if (mode === 'poly') {
     const n = poly.pts.length;
-    html = `<span>${t('ctx.poly')}</span><button data-ctx="undoPt" ${n ? '' : 'disabled'}>${t('btn.undoPt')}</button>` +
+    html = `<span>${t('ctx.poly')}</span>` +
+      (poly.wall && n === 1 ? `<button class="primary" data-ctx="useWall">${t('btn.useWall')}</button>` : '') +
+      `<button data-ctx="undoPt" ${n ? '' : 'disabled'}>${t('btn.undoPt')}</button>` +
       `<button class="primary" data-ctx="closePoly" ${n >= 3 ? '' : 'disabled'}>${t('btn.close')}</button>` +
       (n ? `<button data-ctx="cancelPoly">${t('btn.cancel')}</button>` : '');
   } else if (multi || selSet.size > 1) {
@@ -721,9 +759,10 @@ $('ctxBar').addEventListener('click', e => {
   switch (b.dataset.ctx) {
     case 'cancelLink': cancelLink(); break;
     case 'linkKind': linkKind = b.dataset.k; renderCtx(); break;
-    case 'undoPt': poly.pts.pop(); drawPolyPreview(); renderCtx(); break;
+    case 'undoPt': poly.pts.pop(); poly.wall = null; drawPolyPreview(); renderCtx(); break;
     case 'closePoly': finishPoly(); break;
     case 'cancelPoly': cancelPoly(); break;
+    case 'useWall': useSharedWall(); break;
     case 'linkPair': { const [a, c] = [...selSet]; addEdge(a, c); break; }
     case 'delSel': armConfirm(b, () => deleteNodes([...selSet])); break;
     case 'doneSel': clearSelection(); break;
