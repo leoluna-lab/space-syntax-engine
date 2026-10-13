@@ -2,266 +2,194 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#faf8f2">
+<meta name="description" content="Análise configuracional de espaços convexos (Hillier & Hanson) no navegador.">
 <title>Space Syntax Engine</title>
-<style>
-  :root{
-    --paper:#f3efe6; --panel:#faf8f2; --ink:#1c1b18; --ink2:#5a564c; --muted:#8c8679;
-    --rule:#d8d2c4; --accent:#b23a2e; --wall:#2a2824;
-    --serif:"Palatino Linotype","Palatino","Hoefler Text",Georgia,serif;
-    --sans:"Helvetica Neue",Helvetica,Arial,sans-serif;
-    --mono:"Menlo","Consolas","Courier New",monospace;
-  }
-  *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;height:100%;}
-  body{background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
-  .app{display:grid;grid-template-columns:328px 1fr;min-height:100vh;}
-  .sidebar{background:var(--panel);border-right:1px solid var(--rule);padding:18px 16px 90px;overflow-y:auto;}
-  .brand{font-family:var(--serif);font-size:20px;font-weight:600;margin:0 0 2px;}
-  .brand small{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin-top:5px;}
-  .grp{margin-top:18px;}
-  .grp h3{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;border-bottom:1px solid var(--rule);padding-bottom:5px;}
-  .row{display:flex;gap:6px;align-items:center;margin:6px 0;}
-  input[type=text],select,input[type=number]{font-family:var(--sans);font-size:12.5px;padding:6px 8px;border:1px solid var(--rule);background:#fff;color:var(--ink);border-radius:4px;width:100%;}
-  select,input[type=number]{cursor:pointer;}
-  input[type=number]{width:64px;}
-  button{font-family:var(--mono);font-size:11px;padding:6px 9px;border:1px solid var(--wall);background:var(--wall);color:var(--paper);border-radius:4px;cursor:pointer;white-space:nowrap;}
-  button.ghost{background:transparent;color:var(--ink);border-color:var(--rule);}
-  button.danger{background:transparent;border-color:var(--rule);color:var(--accent);padding:3px 7px;font-size:14px;line-height:1;}
-  button:disabled{opacity:.4;cursor:default;}
-  button:hover:not(:disabled){opacity:.88;}
-  .list{border:1px solid var(--rule);border-radius:4px;background:#fff;max-height:176px;overflow-y:auto;}
-  .li{display:flex;align-items:center;gap:7px;padding:5px 8px;border-bottom:1px dotted var(--rule);font-family:var(--mono);font-size:11.5px;}
-  .li:last-child{border-bottom:none;}
-  .li.isroot{box-shadow:inset 3px 0 0 var(--accent);background:#f7ece0;}
-  .li .rootpick{width:auto;flex:none;accent-color:var(--accent);cursor:pointer;margin:0;}
-  .li .dot{width:11px;height:11px;border-radius:50%;flex:none;border:1px solid rgba(0,0,0,.2);}
-  .li .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text;}
-  .li .mini{color:var(--muted);font-size:10px;}
-  textarea{width:100%;min-height:70px;font-family:var(--mono);font-size:10.5px;border:1px solid var(--rule);border-radius:4px;padding:7px;resize:vertical;background:#fff;color:var(--ink2);}
-  .hint{font-size:11px;color:var(--muted);line-height:1.45;margin:7px 0 0;}
-  .warn{background:#fbe9e6;border:1px solid #e3a79f;color:#7d241a;font-size:11.5px;padding:8px 10px;border-radius:4px;margin-top:10px;display:none;}
-  label.chk{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:var(--ink2);}
-  label.chk input{width:auto;}
-  .btnrow{display:flex;flex-wrap:wrap;gap:6px;}
-  .btnrow button{flex:1 1 auto;}
-
-  main{display:flex;flex-direction:column;min-width:0;}
-  .topbar{display:flex;align-items:center;gap:12px;padding:12px 22px;border-bottom:1px solid var(--rule);flex-wrap:wrap;}
-  .tabs{display:flex;gap:2px;}
-  .tab{font-family:var(--mono);font-size:11.5px;padding:7px 13px;border:1px solid var(--rule);background:var(--panel);color:var(--ink2);cursor:pointer;border-radius:5px;}
-  .tab.active{background:var(--wall);color:var(--paper);border-color:var(--wall);}
-  .spacer{flex:1;}
-  .measure-pick{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--ink2);}
-  .measure-pick select{width:auto;}
-  .view{padding:16px 22px 90px;display:none;}
-  .view.active{display:block;}
-
-  .toolbar{display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap;}
-  .modebtn{font-family:var(--mono);font-size:11px;padding:6px 11px;border:1px solid var(--rule);background:var(--panel);color:var(--ink2);border-radius:5px;cursor:pointer;}
-  .modebtn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
-  .toolbar .sep{width:1px;height:20px;background:var(--rule);margin:0 3px;}
-  .modehint{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-left:auto;}
-
-  .canvaswrap{position:relative;width:100%;height:clamp(380px,60vh,600px);border:1px solid var(--rule);background:
-    repeating-linear-gradient(0deg,transparent,transparent 23px,rgba(0,0,0,.025) 24px),
-    repeating-linear-gradient(90deg,transparent,transparent 23px,rgba(0,0,0,.025) 24px),var(--panel);
-    overflow:hidden;border-radius:6px;}
-  svg.graph{width:100%;height:100%;display:block;touch-action:none;}
-  .legend{display:flex;align-items:center;gap:10px;justify-content:center;margin-top:10px;font-family:var(--mono);font-size:10.5px;color:var(--ink2);}
-  .legend .ramp{height:12px;width:220px;border:1px solid rgba(0,0,0,.2);}
-  .foot{font-size:11px;color:var(--muted);margin-top:12px;line-height:1.5;max-width:84ch;}
-  .foot code{font-family:var(--mono);background:var(--panel);border:1px solid var(--rule);padding:1px 4px;border-radius:3px;}
-
-  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;}
-  .card{border:1px solid var(--rule);background:var(--panel);padding:11px 13px;border-radius:5px;}
-  .card .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:5px;}
-  .card .v{font-family:var(--serif);font-size:20px;color:var(--ink);}
-  .card .v b{color:var(--accent);}
-  .valbox{border:1px solid var(--rule);border-radius:5px;background:var(--panel);padding:12px 14px;margin-bottom:16px;font-size:12.5px;color:var(--ink2);}
-  .valbox h4{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 7px;}
-  .valbox .ok{color:#2b7a4b;}
-  .valbox .bad{color:var(--accent);}
-  .valbox ul{margin:4px 0 0;padding-left:18px;}
-
-  .tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:5px;}
-  table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12px;background:var(--panel);}
-  th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--rule);white-space:nowrap;}
-  th{background:var(--ink);color:var(--paper);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;position:sticky;top:0;}
-  td.name,th.name{text-align:left;}
-  tbody tr.sel{background:#f3e3c9;}
-  tbody tr.root td{font-style:italic;}
-  .chip{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:middle;border:1px solid rgba(0,0,0,.2);}
-  .up,.down{color:#2b7a4b;} .down{color:var(--accent);}
-
-  .tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:10.5px;padding:7px 9px;border-radius:4px;opacity:0;transition:opacity .1s;z-index:80;line-height:1.5;max-width:230px;}
-  .info{background:#eef3ec;border:1px solid #bcd3bf;color:#2b5d3a;font-size:11.5px;padding:8px 10px;border-radius:4px;margin-top:10px;display:none;}
-  #ovl{position:fixed;inset:0;background:rgba(28,27,24,.82);z-index:200;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:24px;}
-  #ovl img{max-width:92vw;max-height:72vh;border:1px solid var(--rule);background:var(--paper);box-shadow:0 10px 40px rgba(0,0,0,.4);}
-  #ovl .obar{display:flex;gap:10px;align-items:center;}
-  #ovl .ohint{color:var(--paper);font-family:var(--mono);font-size:12px;}
-  #ovl a.dl{font-family:var(--mono);font-size:12px;color:var(--ink);background:var(--paper);padding:7px 12px;border-radius:5px;text-decoration:none;border:1px solid var(--rule);}
-  .node{cursor:pointer;}
-  .node.selnode > .halo{display:block;}
-  .node .halo{display:none;}
-
-  @media (max-width:880px){ .app{grid-template-columns:1fr;} .sidebar{border-right:none;border-bottom:1px solid var(--rule);} }
-  @media print{
-    .app{display:block;} .sidebar,.topbar,.toolbar,.legend,.foot{display:none!important;}
-    .view{display:none!important;} .view#view-results{display:block!important;padding:0;}
-    body{background:#fff;}
-  }
-</style>
+<link rel="stylesheet" href="./src/styles.css">
 </head>
-<body>
+<body data-view="graph">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></symbol>
+  <symbol id="i-projector" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-select" viewBox="0 0 24 24"><path d="M6 3l12 8-5.5 1.5L10 18z"/></symbol>
+  <symbol id="i-add" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="12" r="3"/><path d="M9 12h6"/></symbol>
+  <symbol id="i-poly" viewBox="0 0 24 24"><path d="M12 3l8 6-3 11H7L4 9z"/></symbol>
+  <symbol id="i-zin" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5M11 8v6M8 11h6"/></symbol>
+  <symbol id="i-zout" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5M8 11h6"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-draw" viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/></symbol>
+  <symbol id="i-jgraph" viewBox="0 0 24 24"><circle cx="12" cy="19" r="2"/><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><path d="M12 17v-3M10.6 10.6 7.2 6.5M13.4 10.6l3.4-4.1"/></symbol>
+  <symbol id="i-results" viewBox="0 0 24 24"><path d="M5 20V11M11 20V5M17 20v-6M3 20h18"/></symbol>
+  <symbol id="i-compare" viewBox="0 0 24 24"><rect x="3" y="5" width="7" height="14" rx="1"/><rect x="14" y="5" width="7" height="14" rx="1"/></symbol>
+  <symbol id="i-model" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+  <symbol id="i-root" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/></symbol>
+</svg>
+
 <div class="app">
-  <aside class="sidebar">
-    <div class="brand">Space Syntax Engine<small>Convex configuration · Hillier &amp; Hanson</small></div>
+  <header class="appbar">
+    <div class="brand">Space Syntax Engine<small data-i18n="brand.sub"></small></div>
+    <nav class="toptabs" role="tablist">
+      <button class="tab" role="tab" data-view="graph" data-i18n="tab.graph"></button>
+      <button class="tab" role="tab" data-view="jgraph" data-i18n="tab.jgraph"></button>
+      <button class="tab" role="tab" data-view="results" data-i18n="tab.results"></button>
+      <button class="tab" role="tab" data-view="compare" data-i18n="tab.compare"></button>
+    </nav>
+    <div class="spacer"></div>
+    <button class="icon" id="btnUndo" data-i18n-aria="undo"><svg class="ico"><use href="#i-undo"/></svg></button>
+    <button class="icon" id="btnRedo" data-i18n-aria="redo"><svg class="ico"><use href="#i-redo"/></svg></button>
+    <button class="icon" id="btnProjector" aria-pressed="false" data-i18n-aria="projector"><svg class="ico"><use href="#i-projector"/></svg></button>
+    <button class="icon lang" id="btnLang" data-i18n-aria="lang.switch"></button>
+  </header>
 
-    <div class="grp">
-      <h3>Root (carrier / entrance)</h3>
+  <aside class="panel" id="panel">
+    <details class="grp" open>
+      <summary data-i18n="grp.root"></summary>
       <select id="rootSel"></select>
-      <p class="hint">Or tick the ⦿ beside a space below. To analyse the interior only, delete the exterior node.</p>
-    </div>
+      <p class="hint" data-i18n="hint.root"></p>
+    </details>
 
-    <div class="grp">
-      <h3>History</h3>
-      <div class="btnrow">
-        <button class="ghost" id="btnUndo" title="Ctrl+Z">↶ Undo</button>
-        <button class="ghost" id="btnRedo" title="Ctrl+Y">↷ Redo</button>
-      </div>
-    </div>
-
-    <div class="grp">
-      <h3>Spaces <span id="nCount" class="mini" style="color:var(--muted)"></span></h3>
-      <p class="hint" style="margin:0 0 8px;">⦿ sets root · double-click a name to rename · × deletes.</p>
+    <details class="grp" open>
+      <summary><span data-i18n="grp.spaces"></span> <span id="nCount" class="count"></span></summary>
+      <p class="hint" style="margin:0 0 .4rem" data-i18n="hint.spaces"></p>
       <div class="list" id="nodeList"></div>
-      <div class="row" style="margin-top:8px;">
-        <input type="text" id="newName" placeholder="New space name…">
-        <button id="addNode">Add</button>
+      <div class="row"><input type="text" id="newName" maxlength="200" data-i18n-ph="ph.newName"><button id="addNode" data-i18n="btn.add"></button></div>
+    </details>
+
+    <details class="grp" open>
+      <summary><span data-i18n="grp.links"></span> <span id="eCount" class="count"></span></summary>
+      <div class="row"><select id="edgeA"></select><span aria-hidden="true">↔</span><select id="edgeB"></select><button id="addEdge" data-i18n="btn.link"></button></div>
+      <div class="list" id="edgeList" style="max-height:10rem"></div>
+    </details>
+
+    <details class="grp">
+      <summary data-i18n="grp.view"></summary>
+      <label class="chk"><input type="checkbox" id="optSnap"> <span data-i18n="opt.snap"></span></label>
+      <label class="chk"><input type="checkbox" id="optValues"> <span data-i18n="opt.values"></span></label>
+      <div class="row"><span class="lbl" data-i18n="opt.radius"></span><input type="number" id="optRadius" min="0" max="20" step="1" value="0" inputmode="numeric"></div>
+      <p class="hint" data-i18n="hint.radius"></p>
+    </details>
+
+    <details class="grp">
+      <summary data-i18n="grp.conv"></summary>
+      <div class="row"><span class="lbl" data-i18n="conv.entropy"></span>
+        <select id="optEntropy"><option value="depthmapx" data-i18n="conv.entropy.dm"></option><option value="excludeSelf" data-i18n="conv.entropy.v1"></option></select></div>
+      <div class="row"><span class="lbl" data-i18n="conv.h"></span>
+        <select id="optHFactor"><option value="ra" data-i18n="conv.h.ra"></option><option value="integration" data-i18n="conv.h.int"></option></select></div>
+      <p class="hint" data-i18n="hint.conv"></p>
+    </details>
+
+    <details class="grp">
+      <summary data-i18n="grp.bg"></summary>
+      <div class="row"><input type="file" id="bgFile" accept="image/*" style="font-size:.72rem"></div>
+      <div id="bgControls" hidden>
+        <div class="row"><span class="lbl" data-i18n="bg.opacity"></span><input type="range" id="bgOp" min="0.05" max="1" step="0.05" value="0.5"></div>
+        <div class="row"><span class="lbl" data-i18n="bg.rotate"></span><input type="range" id="bgRot" min="-180" max="180" step="1" value="0"></div>
+        <div class="row"><span class="lbl" data-i18n="bg.scale"></span><input type="range" id="bgScale" min="0.3" max="3" step="0.02" value="1"></div>
+        <div class="row"><span class="lbl" data-i18n="bg.dx"></span><input type="range" id="bgDx" min="-300" max="300" step="2" value="0"></div>
+        <div class="row"><span class="lbl" data-i18n="bg.dy"></span><input type="range" id="bgDy" min="-300" max="300" step="2" value="0"></div>
+        <div class="btnrow"><button class="danger" id="bgClear" data-i18n="bg.remove"></button></div>
       </div>
-    </div>
+      <p class="hint" data-i18n="hint.bg"></p>
+    </details>
 
-    <div class="grp">
-      <h3>Connections <span id="eCount" class="mini" style="color:var(--muted)"></span></h3>
-      <div class="row">
-        <select id="edgeA"></select><span style="color:var(--muted)">↔</span><select id="edgeB"></select>
-        <button id="addEdge">Link</button>
-      </div>
-      <div class="list" id="edgeList" style="margin-top:8px;max-height:120px;"></div>
-    </div>
+    <details class="grp">
+      <summary data-i18n="grp.convex"></summary>
+      <div class="btnrow"><button class="ghost" id="btnDerive" data-i18n="btn.derive"></button></div>
+      <p class="hint" data-i18n="hint.convex"></p>
+    </details>
 
-    <div class="grp">
-      <h3>View options</h3>
-      <label class="chk"><input type="checkbox" id="optSnap"> Snap to grid (20)</label>
-      <label class="chk" style="margin-top:6px;"><input type="checkbox" id="optValues"> Show values on nodes</label>
-      <div class="row" style="margin-top:8px;">
-        <span class="mini" style="color:var(--muted);min-width:92px;">Radius (0 = global)</span>
-        <input type="number" id="optRadius" min="0" max="20" step="1" value="0">
-      </div>
-      <p class="hint">Radius limits integration, choice and entropy to n steps (local measures).</p>
-    </div>
-
-    <div class="grp">
-      <h3>Conventions</h3>
-      <div class="row"><span class="mini" style="color:var(--muted);min-width:92px;">Entropy</span>
-        <select id="optEntropy"><option value="depthmapx">depthmapX (n_d/k, incl. self)</option><option value="excludeSelf">Engine v1 (n_d/(k−1))</option></select></div>
-      <div class="row"><span class="mini" style="color:var(--muted);min-width:92px;">H* triple</span>
-        <select id="optHFactor"><option value="ra">RA (original)</option><option value="integration">Integration (engine v1)</option></select></div>
-      <p class="hint">Defaults follow depthmapX 0.9.1 and Hillier, Hanson &amp; Graham (1987). Declare the convention when reporting values.</p>
-    </div>
-
-    <div class="grp">
-      <h3>Background plan</h3>
-      <div class="row"><input type="file" id="bgFile" accept="image/*" style="font-family:var(--mono);font-size:10.5px;"></div>
-      <div id="bgControls" style="display:none;">
-        <div class="row"><span class="mini" style="min-width:60px;color:var(--muted);">Opacity</span><input type="range" id="bgOp" min="0.05" max="1" step="0.05" value="0.5" style="flex:1;"><button class="danger" id="bgClear" title="Remove">×</button></div>
-        <div class="row"><span class="mini" style="min-width:60px;color:var(--muted);">Rotate</span><input type="range" id="bgRot" min="-180" max="180" step="1" value="0" style="flex:1;"></div>
-        <div class="row"><span class="mini" style="min-width:60px;color:var(--muted);">Scale</span><input type="range" id="bgScale" min="0.3" max="3" step="0.02" value="1" style="flex:1;"></div>
-        <div class="row"><span class="mini" style="min-width:60px;color:var(--muted);">Shift X</span><input type="range" id="bgDx" min="-300" max="300" step="2" value="0" style="flex:1;"></div>
-        <div class="row"><span class="mini" style="min-width:60px;color:var(--muted);">Shift Y</span><input type="range" id="bgDy" min="-300" max="300" step="2" value="0" style="flex:1;"></div>
-      </div>
-      <p class="hint">A mask to trace over. Place nodes on rooms (Add mode or double-click) and link them.</p>
-    </div>
-
-    <div class="grp">
-      <h3>Convex polygons</h3>
-      <button class="ghost" id="btnDerive" style="width:100%;">Derive links from polygons</button>
-      <p class="hint">In Convex mode, click vertices and press Enter to close a convex space. Shared edges become links here.</p>
-    </div>
-
-    <div class="grp">
-      <h3>Export</h3>
+    <details class="grp">
+      <summary data-i18n="grp.export"></summary>
       <div class="btnrow">
-        <button class="ghost" id="exCSV">CSV</button>
-        <button class="ghost" id="exPNG">PNG graph</button>
-        <button class="ghost" id="exPNGJ">PNG j-graph</button>
+        <button class="ghost" id="exCSV" data-i18n="ex.csv"></button>
+        <button class="ghost" id="exPNG" data-i18n="ex.png"></button>
+        <button class="ghost" id="exPNGJ" data-i18n="ex.pngj"></button>
       </div>
-      <div class="btnrow" style="margin-top:6px;">
-        <button class="ghost" id="exCopy">Copy table</button>
-        <button class="ghost" id="exPrint">Print report</button>
+      <div class="btnrow">
+        <button class="ghost" id="exCopy" data-i18n="ex.copy"></button>
+        <button class="ghost" id="exPrint" data-i18n="ex.print"></button>
       </div>
-    </div>
+    </details>
 
-    <div class="grp">
-      <h3>Model I/O</h3>
-      <div class="btnrow"><button class="ghost" id="btnExport">Export JSON</button><button class="ghost" id="btnLoad">Load box</button></div>
-      <textarea id="io" spellcheck="false" placeholder="Paste model JSON and press Load…"></textarea>
-      <div class="btnrow" style="margin-top:6px;"><button class="ghost" id="btnReset">Reset to validated</button><button class="ghost" id="btnStoreB">Store as B</button></div>
-      <div class="warn" id="warnBox"></div>
-      <div class="info" id="infoBox"></div>
-    </div>
+    <details class="grp" id="grpIO">
+      <summary data-i18n="grp.io"></summary>
+      <div class="btnrow"><button class="ghost" id="btnExport" data-i18n="io.export"></button><button class="ghost" id="btnLoad" data-i18n="io.load"></button></div>
+      <textarea id="io" spellcheck="false" data-i18n-ph="ph.io" style="margin-top:.4rem"></textarea>
+      <div class="note" id="ioNote" hidden></div>
+      <div class="warn" id="ioWarn" hidden style="margin-top:.5rem"></div>
+      <div class="btnrow"><button class="ghost" id="btnReset" data-i18n="io.reset"></button><button class="ghost" id="btnStoreB" data-i18n="io.storeB"></button></div>
+    </details>
   </aside>
 
   <main>
-    <div class="topbar">
-      <div class="tabs">
-        <div class="tab active" data-view="graph">Configuration</div>
-        <div class="tab" data-view="jgraph">Justified graph</div>
-        <div class="tab" data-view="results">Results</div>
-        <div class="tab" data-view="compare">Compare</div>
+    <section class="view" id="view-graph" role="tabpanel">
+      <div class="viewhead">
+        <label class="measure-pick"><span data-i18n="colourBy"></span><select id="measureSel"></select></label>
+        <button class="icon" id="measureInfo" data-i18n-aria="aboutMeasure"><svg class="ico"><use href="#i-info"/></svg></button>
+        <div class="legend" aria-hidden="true"><span id="legLo"></span><span class="ramp"></span><span id="legHi"></span></div>
       </div>
-      <div class="spacer"></div>
-      <div class="measure-pick"><span>Colour by</span><select id="measureSel"></select></div>
-    </div>
-
-    <section class="view active" id="view-graph">
-      <div class="toolbar">
-        <button class="modebtn active" data-mode="select">Select / move</button>
-        <button class="modebtn" data-mode="add">+ Node</button>
-        <button class="modebtn" data-mode="link">↔ Link</button>
-        <button class="modebtn" data-mode="poly">⬠ Convex</button>
-        <span class="sep"></span>
-        <span class="modehint" id="modeHint"></span>
+      <div class="warn" id="warnBox" hidden></div>
+      <div class="canvaswrap">
+        <svg class="graph" id="svgGraph" viewBox="0 0 760 480" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="modes" role="toolbar">
+          <button class="modebtn" data-mode="select" data-i18n-aria="mode.select"><svg class="ico"><use href="#i-select"/></svg><span data-i18n="mode.select"></span></button>
+          <button class="modebtn" data-mode="add" data-i18n-aria="mode.add"><svg class="ico"><use href="#i-add"/></svg><span data-i18n="mode.add"></span></button>
+          <button class="modebtn" data-mode="link" data-i18n-aria="mode.link"><svg class="ico"><use href="#i-link"/></svg><span data-i18n="mode.link"></span></button>
+          <button class="modebtn" data-mode="poly" data-i18n-aria="mode.poly"><svg class="ico"><use href="#i-poly"/></svg><span data-i18n="mode.poly"></span></button>
+        </div>
+        <div class="zoom">
+          <button class="icon" id="zoomIn" data-i18n-aria="zoom.in"><svg class="ico"><use href="#i-zin"/></svg></button>
+          <button class="icon" id="zoomOut" data-i18n-aria="zoom.out"><svg class="ico"><use href="#i-zout"/></svg></button>
+          <button class="icon" id="zoomFit" data-i18n-aria="zoom.fit"><svg class="ico"><use href="#i-fit"/></svg></button>
+        </div>
+        <div class="ctxbar" id="ctxBar" hidden></div>
       </div>
-      <div class="canvaswrap"><svg class="graph" id="svgGraph" viewBox="0 0 760 480" preserveAspectRatio="xMidYMid meet"></svg></div>
-      <div class="legend"><span id="legLo"></span><span class="ramp" id="legRamp"></span><span id="legHi"></span></div>
-      <p class="foot">Select/move: drag nodes, shift-click to multi-select, drag empty to box-select, click a link to delete. Add: click to place. Link: click two nodes. Convex: click vertices, Enter to close. Shortcuts: N add · L link pair · R root · Del delete · Esc cancel.</p>
+      <p class="foot desk-only" data-i18n="help.graph"></p>
     </section>
 
-    <section class="view" id="view-jgraph">
+    <section class="view" id="view-jgraph" role="tabpanel">
       <div class="canvaswrap"><svg class="graph" id="svgJ" viewBox="0 0 760 480" preserveAspectRatio="xMidYMid meet"></svg></div>
-      <p class="foot">Banded by depth from root (depth 0 at base). Colour = depth; non-tree links (rings) dashed.</p>
+      <p class="foot" data-i18n="help.jgraph"></p>
     </section>
 
-    <section class="view" id="view-results">
+    <section class="view" id="view-results" role="tabpanel">
       <div class="valbox" id="valBox"></div>
       <div class="cards" id="globalCards"></div>
+      <label class="sortbar"><span data-i18n="sortBy"></span><select id="sortSel"></select></label>
       <div class="tablewrap"><table id="resTable"><thead></thead><tbody></tbody></table></div>
+      <div class="spacecards" id="spaceCards"></div>
       <p class="foot" id="methodFoot"></p>
     </section>
 
-    <section class="view" id="view-compare">
-      <p class="foot" style="margin-top:0;">Store a baseline with “Store as B”, change the model, then compare. Matching node ids are diffed.</p>
+    <section class="view" id="view-compare" role="tabpanel">
+      <p class="foot" style="margin:0 0 .6rem" data-i18n="cmp.intro"></p>
       <div id="compareBox"></div>
     </section>
   </main>
+
+  <nav class="bottomnav" role="tablist">
+    <button role="tab" data-view="graph"><svg class="ico"><use href="#i-draw"/></svg><span data-i18n="nav.graph"></span></button>
+    <button role="tab" data-view="jgraph"><svg class="ico"><use href="#i-jgraph"/></svg><span data-i18n="nav.jgraph"></span></button>
+    <button role="tab" data-view="results"><svg class="ico"><use href="#i-results"/></svg><span data-i18n="nav.results"></span></button>
+    <button role="tab" data-view="compare"><svg class="ico"><use href="#i-compare"/></svg><span data-i18n="nav.compare"></span></button>
+    <button role="tab" data-view="model"><svg class="ico"><use href="#i-model"/></svg><span data-i18n="nav.model"></span></button>
+  </nav>
 </div>
+
+<section class="sheet" id="sheet" hidden aria-live="polite"></section>
+<div class="toast" id="toast" role="status" hidden><span id="toastMsg"></span><button id="toastAct" hidden></button></div>
+<dialog class="infodlg" id="infoDlg"></dialog>
 <div class="tip" id="tip"></div>
 <div id="ovl">
   <div class="ohint" id="ovlHint"></div>
-  <img id="ovlImg" alt="export">
-  <div class="obar"><a class="dl" id="ovlDl" download>Try download</a><button id="ovlClose">Close</button></div>
+  <img id="ovlImg" alt="">
+  <div class="obar"><a class="dl" id="ovlDl" download data-i18n="ovl.download"></a><button id="ovlClose" data-i18n="ovl.close"></button></div>
 </div>
 
 <script type="module" src="./src/main.js"></script>

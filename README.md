@@ -2,10 +2,21 @@
 
 Motor de análise configuracional de **espaços convexos** (sintaxe espacial, Hillier &amp; Hanson) com interface local, 100% no navegador — sem servidor e sem dependências em tempo de execução.
 
+## Interface (celular, tablet e desktop)
+- **Celular:** barra inferior (Desenhar · J-graph · Resultados · Comparar · Modelo); dois dedos para zoom e mover; toque num espaço abre o painel de detalhes; toque longo ativa a seleção múltipla.
+- **Desktop:** abas no topo e painel lateral; roda do mouse = zoom; Alt+arrastar = mover a vista; atalhos N, L, R, Del, Esc, Ctrl+Z/Y.
+- **Polígonos convexos:** toque os vértices e toque no 1º ponto (ou "Fechar"); polígonos não convexos geram aviso.
+- **Nada destrutivo com um toque:** apagar pede confirmação e o aviso oferece "Desfazer".
+- **Glossário:** o ícone ⓘ e os cartões de resultados explicam cada medida (definição, fórmula, leitura, referência).
+- **Modo projetor** (ícone de monitor) e **PT/EN** no topo.
+
 ## Estrutura
 ```
-index.html            interface (HTML + CSS)
-src/main.js           lógica da interface
+index.html            estrutura da interface
+src/styles.css        estilos (responsivo, projetor, alvos de toque ≥ 44 px)
+src/main.js           lógica da interface (gestos, painel, vistas)
+src/i18n.js           textos PT/EN
+src/glossary.js       glossário das medidas PT/EN
 src/engine/           motor de análise (TypeScript puro, sem DOM)
   model.ts            esquema de dados v2, validação e migração do v1
   graph.ts            grafo CSR, BFS, Brandes (choice), blocos biconexos
