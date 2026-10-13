@@ -34,6 +34,7 @@
 <div class="app">
   <header class="appbar">
     <div class="brand">Space Syntax Engine<small data-i18n="brand.sub"></small></div>
+    <span class="modebadge research-only" data-i18n="mode.research"></span>
     <select id="scnSel" class="scnsel" data-i18n-aria="scn.select"></select>
     <nav class="toptabs" role="tablist">
       <button class="tab" role="tab" data-view="graph" data-i18n="tab.graph"></button>
@@ -49,6 +50,15 @@
   </header>
 
   <aside class="panel" id="panel">
+    <details class="grp" open id="grpMode">
+      <summary data-i18n="grp.mode"></summary>
+      <div class="seg modeseg" role="group">
+        <button data-mode-btn="simple" aria-pressed="true" data-i18n="mode.simple"></button>
+        <button data-mode-btn="research" aria-pressed="false" data-i18n="mode.research"></button>
+      </div>
+      <p class="hint" data-i18n="hint.mode"></p>
+    </details>
+
     <details class="grp" open id="grpScn">
       <summary><span data-i18n="grp.scn"></span> <span id="sCount" class="count"></span></summary>
       <div class="row"><span class="lbl" data-i18n="scn.rename"></span><input type="text" id="scnName" maxlength="80"></div>
@@ -90,6 +100,7 @@
         <select id="optEntropy"><option value="depthmapx" data-i18n="conv.entropy.dm"></option><option value="excludeSelf" data-i18n="conv.entropy.v1"></option></select></div>
       <div class="row"><span class="lbl" data-i18n="conv.h"></span>
         <select id="optHFactor"><option value="ra" data-i18n="conv.h.ra"></option><option value="integration" data-i18n="conv.h.int"></option></select></div>
+      <label class="chk research-only"><input type="checkbox" id="optDoorVisual"> <span data-i18n="opt.doorVisual"></span></label>
       <p class="hint" data-i18n="hint.conv"></p>
     </details>
 
@@ -140,6 +151,7 @@
     <section class="view" id="view-graph" role="tabpanel">
       <div class="viewhead">
         <label class="measure-pick"><span data-i18n="colourBy"></span><select id="measureSel"></select></label>
+        <label class="measure-pick layer-pick research-only"><span data-i18n="layer"></span><select class="layer-sel" data-i18n-aria="layer"></select></label>
         <button class="icon" id="measureInfo" data-i18n-aria="aboutMeasure"><svg class="ico"><use href="#i-info"/></svg></button>
         <div class="legend" aria-hidden="true"><span id="legLo"></span><span class="ramp"></span><span id="legHi"></span></div>
       </div>
@@ -168,9 +180,11 @@
     </section>
 
     <section class="view" id="view-results" role="tabpanel">
+      <label class="measure-pick layer-pick res-layer research-only"><span data-i18n="layer"></span><select class="layer-sel" data-i18n-aria="layer"></select></label>
       <div class="valbox" id="valBox"></div>
       <div class="cards" id="globalCards"></div>
       <div class="valbox funcbox" id="funcBox"></div>
+      <div class="valbox funcbox" id="orientBox" hidden></div>
       <label class="sortbar"><span data-i18n="sortBy"></span><select id="sortSel"></select></label>
       <div class="tablewrap"><table id="resTable"><thead></thead><tbody></tbody></table></div>
       <div class="spacecards" id="spaceCards"></div>
@@ -186,6 +200,7 @@
           <button role="tab" data-cv="jgraph" data-i18n="cv.jgraph"></button>
         </div>
         <label class="measure-pick"><span data-i18n="colourBy"></span><select id="cmpMeasure"></select></label>
+        <label class="measure-pick layer-pick research-only"><span data-i18n="layer"></span><select class="layer-sel" data-i18n-aria="layer"></select></label>
       </div>
       <div class="chips" id="cmpChips"></div>
       <div id="compareBox"></div>

@@ -249,6 +249,26 @@ svg.minisvg { display: block; width: 100%; aspect-ratio: 4 / 3; height: auto; }
 .cmp-pair { display: flex; align-items: flex-end; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
 .cmp-pair label { display: flex; flex-direction: column; gap: .2rem; font-family: var(--mono); font-size: .66rem; color: var(--muted); flex: 1; min-width: 9rem; }
 
+/* ---------- modo Simples / Pesquisa ---------- */
+body:not(.research) .research-only { display: none !important; }
+.modeseg { width: 100%; }
+.modeseg button { flex: 1; }
+.modeseg button[aria-pressed="true"] { background: var(--wall); color: var(--paper); }
+.modebadge {
+  font-family: var(--mono); font-size: .6rem; letter-spacing: .1em; text-transform: uppercase;
+  background: #2f5d8a; color: #fff; border-radius: 4px; padding: .15rem .4rem; white-space: nowrap;
+}
+
+/* ---------- camadas e orientação ---------- */
+.layer-pick select { max-width: 11rem; }
+.res-layer { margin-bottom: .6rem; }
+.faces { display: block; margin: 0 0 .4rem; text-align: left; }
+.kind { font-family: var(--mono); font-size: .7rem; padding: 0 .3rem; border-radius: 4px; border: 1px solid var(--rule); }
+.k-opaco { color: var(--muted); border-style: dotted; }
+.k-vista { color: #2f5d8a; border-style: dashed; }
+.k-acesso { color: var(--ink); }
+.k-aberto { color: var(--accent); border-width: 2px; }
+
 /* ---------- bottom sheet ---------- */
 .sheet {
   position: fixed; z-index: 60; right: 1rem; bottom: 1rem; width: 350px; max-height: 75vh; overflow-y: auto;
@@ -341,6 +361,8 @@ dialog.infodlg::backdrop { background: rgba(28, 27, 24, .45); }
   #view-graph, #view-jgraph { padding-bottom: .5rem; }
   .viewhead { gap: .3rem; }
   .measure-pick > span { display: none; }
+  .layer-pick { flex: 0 0 auto; }
+  .layer-pick select { max-width: 8.5rem; }
   .measure-pick select { max-width: none; }
   .measure-pick { flex: 1; }
   .legend { width: 100%; margin-left: 0; justify-content: center; }

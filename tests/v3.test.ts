@@ -145,3 +145,34 @@ describe('JSON Schema público (fonte única para o app e o Python)', () => {
     expect(validate(d)).toBe(false);
   });
 });
+
+describe('orientação (faces) — F4.2', () => {
+  it('faces por espaço, aberturas e entradas na casa vernacular', async () => {
+    const { orientation } = await import('../src/engine');
+    const o = orientation(migrateModel(casa()));
+    expect(o.perSpace.q1.faces).toEqual({ N: 'vista', O: 'vista' });
+    expect(o.perSpace.q2.opensTo).toEqual(['N']); // a face L é parede cega
+    expect(o.perSpace.v1.accessFaces).toEqual(['S', 'L', 'O']);
+    expect(o.perSpace.c1.accessFaces).toEqual(['L']);
+    expect(o.perSpace.ext).toBeUndefined();
+    expect(o.byFace.N).toEqual({ opaco: 0, vista: 2, acesso: 0, aberto: 0 });
+    expect(o.byFace.L).toEqual({ opaco: 1, vista: 0, acesso: 1, aberto: 1 });
+    expect(o.byFace.O).toEqual({ opaco: 0, vista: 2, acesso: 0, aberto: 1 });
+    expect(o.noFace).toBe(0);
+  });
+
+  it('sem exterior marcado não há orientação; exterior sem face é contado', async () => {
+    const { orientation } = await import('../src/engine');
+    expect(orientation(migrateModel(structuredClone(VALIDATED))).perSpace).toEqual({});
+    const c = casa(); delete c.edges[0].face; delete c.edges[1].face; c.edges.splice(1, 1);
+    expect(orientation(migrateModel(c)).noFace).toBe(1);
+  });
+
+  it('a camada muda a análise: visual tem mais ligações que acesso e outra integração', () => {
+    const m = migrateModel(casa());
+    const acc = analyse(layerInput(m, 'acesso')), vis = analyse(layerInput(m, 'visual'));
+    expect(acc.L).toBe(6);
+    expect(vis.L).toBe(10);
+    expect(vis.per.q1.integ).not.toBeCloseTo(acc.per.q1.integ!, 3);
+  });
+});

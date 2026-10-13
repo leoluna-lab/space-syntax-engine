@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, layerInput, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, layerInput, layerKinds, orientation, FACES, LAYERS, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -45,10 +45,28 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const snapV = v => (snap ? Math.round(v / gridSize) * gridSize : Math.round(v * 10) / 10);
 // Ligações v3: {a, b, kind, face?}. A seleção guarda a chave (par + face), única por modelo.
 const findEdge = key => model.edges.find(e => edgeKey(e) === key);
-const isPermeable = e => e.kind === 'acesso' || e.kind === 'aberto';
 
-let layer = 'acesso'; // camada analisada (F4.2 traz o seletor)
-function analyse(m, r = radius) { return runAnalysis(layerInput(m, layer), { ...conv, radius: r }); }
+// Camada analisada (roteiro F4): acesso = {acesso, aberto}; visual = {vista, aberto} + porta; adjacência = todas.
+// Modo Simples (padrão) = o grafo de permeabilidade de sempre: só a camada acesso, sem tipos, faces nem camadas na tela.
+// Modo Pesquisa = interfaces tipadas, camadas e orientação NSLO. Os dados são os mesmos; muda o que se vê e se analisa.
+let researchMode = false;
+let layer = 'acesso', doorIsVisual = true;
+const effLayer = () => (researchMode ? layer : 'acesso');
+const layerOpts = () => ({ doorIsVisual });
+const inLayer = e => layerKinds(effLayer(), layerOpts()).has(e.kind);
+const pairsOf = m => layerInput(m, effLayer(), layerOpts()).edges;
+function analyse(m, r = radius) { return runAnalysis(layerInput(m, effLayer(), layerOpts()), { ...conv, radius: r }); }
+/** O modelo tem informação que só o modo Pesquisa mostra? (o exterior marcado sozinho não conta) */
+const hasResearchData = m => m.edges.some(e => e.kind !== 'acesso' || e.face);
+function setResearchMode(on) {
+  researchMode = !!on;
+  document.body.classList.toggle('research', researchMode);
+  document.querySelectorAll('[data-mode-btn]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.modeBtn === 'research') === researchMode)));
+  if (!researchMode && selEdge && !inLayer(findEdge(selEdge) || {})) selEdge = null;
+  recompute();
+}
+/** No modo Simples, avisa que o modelo tem dados de pesquisa escondidos (nada se perde). */
+function hintResearch(m) { if (!researchMode && hasResearchData(m)) toast(t('toast.researchHidden'), t('mode.research'), () => setResearchMode(true)); }
 const activeScenario = () => project.scenarios.find(s => s.id === project.activeId);
 function setModel(m) { model = m; activeScenario().model = m; }
 
@@ -65,7 +83,7 @@ function autosave() {
   try {
     localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      currentMeasure, showValues, snap, radius, conv, projector,
+      currentMeasure, showValues, snap, radius, conv, projector, layer, doorIsVisual, researchMode,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -85,6 +103,9 @@ function loadSaved() {
       currentMeasure = o.currentMeasure || 'integ';
       showValues = !!o.showValues; snap = !!o.snap; radius = o.radius || 0; projector = !!o.projector;
       if (o.conv) conv = Object.assign(conv, o.conv);
+      if (LAYERS.includes(o.layer)) layer = o.layer;
+      researchMode = !!o.researchMode;
+      if (o.doorIsVisual === false) doorIsVisual = false;
       if (o.bg) bg = Object.assign(bg, o.bg);
     }
     const pj = localStorage.getItem('ssx_project');
@@ -170,8 +191,9 @@ function renderPanel() {
       <button class="danger" data-del="${esc(n.id)}" aria-label="${esc(t('btn.delete'))}">×</button>
     </div>`).join('');
   $('nCount').textContent = '(' + model.nodes.length + ')';
-  $('eCount').textContent = '(' + model.edges.length + ')';
-  $('edgeList').innerHTML = model.edges.map((e, i) => `
+  const shown = model.edges.map((e, i) => [e, i]).filter(([e]) => researchMode || inLayer(e));
+  $('eCount').textContent = '(' + shown.length + ')';
+  $('edgeList').innerHTML = shown.map(([e, i]) => `
     <div class="li${selEdge === edgeKey(e) ? ' sel' : ''}">
       <button class="nm" data-edge="${i}">${esc(e.a)} ↔ ${esc(e.b)}${edgeTag(e)}</button>
       <button class="danger" data-dele="${i}" aria-label="${esc(t('act.removeLink'))}">×</button>
@@ -185,13 +207,18 @@ function renderPanel() {
   ss.value = sortKey;
   $('optSnap').checked = snap; $('optValues').checked = showValues; $('optRadius').value = radius;
   $('optEntropy').value = conv.entropy; $('optHFactor').value = conv.differenceFactor;
+  $('optDoorVisual').checked = doorIsVisual;
+  document.querySelectorAll('select.layer-sel').forEach(sel => {
+    sel.innerHTML = LAYERS.map(l => `<option value="${l}">${esc(t('layer.' + l))}</option>`).join('');
+    sel.value = layer;
+  });
   const labs = new Set(t('label.presets').split('|'));
   project.scenarios.forEach(sc => sc.model.nodes.forEach(n => { if (n.label) labs.add(n.label); }));
   $('labelOptions').innerHTML = [...labs].map(l => `<option value="${esc(l)}"></option>`).join('');
 }
 /** Categoria e face, quando fogem do padrão (acesso, sem face). */
 function edgeTag(e) {
-  if (e.kind === 'acesso' && !e.face) return '';
+  if (!researchMode || (e.kind === 'acesso' && !e.face)) return '';
   return ` <span class="mini">${esc(t('kind.' + e.kind))}${e.face ? ' · ' + e.face : ''}</span>`;
 }
 function fillSel(sel, val) {
@@ -270,8 +297,9 @@ function renderGraph() {
     svgG.appendChild(pg); polyEls[n.id] = pg;
   });
   model.edges.forEach(e => {
-    const pa = byId.get(e.a), pb = byId.get(e.b), key = edgeKey(e), perm = isPermeable(e);
-    // F4.1: ligações que não são passagem (opaco, vista) ficam pontilhadas e claras para não serem lidas como portas
+    if (!researchMode && !inLayer(e)) return;
+    const pa = byId.get(e.a), pb = byId.get(e.b), key = edgeKey(e), perm = inLayer(e);
+    // ligações fora da camada analisada ficam pontilhadas e claras (não entram no cálculo)
     const ln = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': perm ? 1.6 : 1.2, 'stroke-opacity': perm ? 0.55 : 0.35, 'stroke-dasharray': perm ? '' : '2 4', class: 'edge' + (selEdge === key ? ' seledge' : '') });
     const hit = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: 'transparent', 'stroke-width': 12, class: 'edgehit' });
     hit.dataset.key = key;
@@ -515,7 +543,8 @@ function addNodeAt(x, y, name) {
 }
 function addEdge(a, b) {
   if (!a || !b || a === b) return;
-  if (model.edges.some(e => edgeKey(e) === edgeKey({ a, b }))) { toast(t('toast.linkExists')); return; }
+  const existing = model.edges.find(e => edgeKey(e) === edgeKey({ a, b }));
+  if (existing) { toast(!researchMode && !inLayer(existing) ? t('toast.linkHidden', { kind: t('kind.' + existing.kind) }) : t('toast.linkExists')); return; }
   mutate(() => model.edges.push({ a, b, kind: 'acesso' }));
 }
 function removeEdge(key) {
@@ -706,6 +735,7 @@ function renderSheet() {
       <div class="sheet-type">${isRoot ? `<span class="badge">${esc(t('root.badge'))}</span>` : ''}
         <button class="linkish" data-info="type">${esc(t('type'))} <b>${p.type}</b> — ${esc(t('type.' + p.type))}</button></div>
       <label class="labelrow"><span>${esc(t('label'))}</span><input type="text" id="sheetLabel" list="labelOptions" value="${esc(n.label || '')}" maxlength="60" placeholder="${esc(t('label.ph'))}" autocomplete="off"></label>
+      ${facesLine(n.id)}
       <div class="mgrid">${rows}</div>
       ${narrow.matches ? `<button class="linkish more" data-act="more" aria-expanded="${sheetExpanded}">${esc(t(sheetExpanded ? 'sheet.less' : 'sheet.more'))}</button>` : ''}
       <div class="sheet-actions">
@@ -802,7 +832,7 @@ function drawJGraph(svg, m, Rx, sel = new Set()) {
   }
   // arestas da árvore de busca em largura a partir da raiz; as demais (anéis) tracejadas
   const adj = new Map(m.nodes.map(n => [n.id, []]));
-  const pairs = layerInput(m, layer).edges;
+  const pairs = pairsOf(m);
   pairs.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
   const key = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
   const tree = new Set();
@@ -870,7 +900,7 @@ function renderResults() {
     : `<span class="ok">${esc(t('val.ok'))}</span>`);
   const f3 = v => (v == null ? '—' : v.toFixed(3));
   const cards = [
-    ['card.k', g.k, 'k'], ['card.L', g.L, 'L'], ['card.rings', g.circuit, 'rings'], ['card.ringiness', g.ringiness.toFixed(3), 'ringiness'],
+    ['card.k', g.k, 'k'], [researchMode ? 'card.L' : 'card.Lsimple', g.L, 'L'], ...(researchMode ? [['card.layer', t('layer.' + layer), 'layer']] : []), ['card.rings', g.circuit, 'rings'], ['card.ringiness', g.ringiness.toFixed(3), 'ringiness'],
     ['card.meanConn', g.meanConn.toFixed(2), 'meanConn'], ['card.meanMD', f3(g.meanMD), 'md'], ['card.meanInt', f3(g.meanInt), 'integ'],
     ['card.meanRRA', f3(g.meanRRA), 'rra'], ['card.diameter', g.diameter, 'diameter'], ['card.Hs', f3(g.Hs), 'Hs'],
     ['card.int', f3(g.intelligibility), 'intelligibility'],
@@ -900,7 +930,8 @@ function renderResults() {
     </button>`;
   }).join('');
   renderFunctional();
-  $('methodFoot').innerHTML = t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
+  renderOrientation();
+  $('methodFoot').innerHTML = (researchMode ? t('method.layer', { layer: t('layer.' + layer), kinds: [...layerKinds(layer, layerOpts())].map(k => t('kind.' + k)).join(', ') }) : '') + t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
     t(conv.differenceFactor === 'ra' ? 'method.h.ra' : 'method.h.int') + t('method.tail');
 }
 $('resTable').querySelector('thead').addEventListener('click', e => {
@@ -932,6 +963,30 @@ function renderFunctional() {
     ${F.stats.map(s => `<tr><td class="name">${esc(s.label)} <span class="mini">${esc(s.ids.join(', '))}</span></td><td>${s.ids.length}</td><td><b>${f3(s.meanInteg)}</b></td><td>${f3(s.meanRRA)}</td><td>${s.meanDepth == null ? '—' : s.meanDepth.toFixed(2)}</td></tr>`).join('')}
     </tbody></table></div>`;
 }
+/** Faces da envoltória para as quais o espaço abre (só com exterior marcado e faces registradas). */
+function facesLine(id) {
+  if (!researchMode) return '';
+  const o = orientation(model).perSpace[id];
+  if (!o) return '';
+  const parts = FACES.filter(f => o.faces[f]).map(f => `<b>${f}</b> ${esc(t('kind.' + o.faces[f]))}`);
+  return `<button class="linkish faces" data-info="orientation">${esc(t('sheet.faces'))}: ${parts.join(' · ')}</button>`;
+}
+function renderOrientation() {
+  const box = $('orientBox'), O = orientation(model);
+  if (!researchMode) { box.hidden = true; return; }
+  const spaces = model.nodes.filter(n => O.perSpace[n.id]);
+  box.hidden = !spaces.length && !O.noFace;
+  if (box.hidden) return;
+  const kindCell = k => (k ? `<span class="kind k-${k}">${esc(t('kind.' + k))}</span>` : '—');
+  const byFace = FACES.map(f => `<tr><th class="name">${f}</th>${['opaco', 'vista', 'acesso', 'aberto'].map(k => `<td>${O.byFace[f][k] || '—'}</td>`).join('')}</tr>`).join('');
+  box.innerHTML = `<h4>${esc(t('orient.title'))} <button class="linkish" data-info="orientation">ⓘ</button></h4>
+    ${O.noFace ? `<p class="bad" style="margin:.2rem 0">${esc(t('orient.noFace', { n: O.noFace }))}</p>` : ''}
+    ${spaces.length ? `<div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.id'))}</th>${FACES.map(f => `<th>${f}</th>`).join('')}</tr></thead><tbody>
+      ${spaces.map(n => `<tr><td class="name">${esc(n.id)} · ${esc(n.name)}</td>${FACES.map(f => `<td>${kindCell(O.perSpace[n.id].faces[f])}</td>`).join('')}</tr>`).join('')}
+    </tbody></table></div>
+    <div class="tablewrap" style="display:block;margin-top:.5rem"><table><thead><tr><th class="name">${esc(t('orient.byFace'))}</th>${['opaco', 'vista', 'acesso', 'aberto'].map(k => `<th>${esc(t('kind.' + k))}</th>`).join('')}</tr></thead><tbody>${byFace}</tbody></table></div>` : ''}`;
+}
+$('orientBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('funcBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('globalCards').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('sortSel').addEventListener('change', e => { sortKey = e.target.value; sortDir = isTextKey(sortKey) ? 1 : -1; renderResults(); });
@@ -1012,8 +1067,9 @@ function importScenarios(pr) {
     if (!famMap.has(sc.family)) famMap.set(sc.family, idMap.get(sc.family) || idMap.get(sc.id));
     project.scenarios.push({ id: idMap.get(sc.id), name: sc.name, family: famMap.get(sc.family), model: sc.model });
   });
-  toast(t('toast.imported', { n: incoming.length }));
   switchScenario(idMap.get(incoming[0].id));
+  if (!researchMode && incoming.some(sc => hasResearchData(sc.model))) hintResearch(incoming.find(sc => hasResearchData(sc.model)).model);
+  else toast(t('toast.imported', { n: incoming.length }));
 }
 
 /* ---------------- COMPARAR ---------------- */
@@ -1038,7 +1094,7 @@ function drawMiniMap(svg, m, Rx, colour) {
     const c = colour(n.id);
     svg.appendChild(Eo('polygon', { points: n.poly.map(p => p.join(',')).join(' '), fill: c, 'fill-opacity': 0.22, stroke: c, 'stroke-width': 1.2 * k }));
   });
-  layerInput(m, layer).edges.forEach(([a, b2]) => {
+  pairsOf(m).forEach(([a, b2]) => {
     const A = pos.get(a), B = pos.get(b2);
     svg.appendChild(Eo('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, stroke: C.wall, 'stroke-width': 1.4 * k, 'stroke-opacity': 0.55 }));
   });
@@ -1107,7 +1163,7 @@ function renderCompare() {
       rows += `<tr><th class="name rowh"><button class="linkish" data-info="genotype">${esc(t('cmp.genotype'))}</button></th>${scs.map(sc => `<td class="name wrap">${esc(functionalSummary(sc.model, globalOf(sc.model, res.get(sc.id))).inequality || '—')}</td>`).join('')}</tr>`;
     }
     box.innerHTML = `<div class="tablewrap" style="display:block"><table class="cmp-table"><thead><tr><th class="name">${esc(t('cmp.indicator'))}</th>${scs.map(sc => `<th>${esc(sc.name)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="foot">${esc(t('cmp.maxMin'))} ${esc(t('cmp.sizeNote'))}</p>`;
+      <p class="foot">${researchMode ? esc(t('cmp.layerNote', { layer: t('layer.' + layer) })) + ' ' : ''}${esc(t('cmp.maxMin'))} ${esc(t('cmp.sizeNote'))}</p>`;
     return;
   }
 
@@ -1196,11 +1252,14 @@ function showImageOverlay(url, name) {
   $('ovl').style.display = 'flex';
 }
 function tableCSV() {
-  const cols = ['id', 'name', 'label', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+  // modo Simples: mesmas colunas de antes; modo Pesquisa acrescenta camada e faces
+  const cols = ['id', 'name', 'label', ...(researchMode ? ['camada', 'faces'] : []), 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+  const orient = orientation(model).perSpace;
   let out = cols.join(',') + '\n';
   model.nodes.forEach(n => {
     const p = R.per[n.id];
-    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
+    const faces = orient[n.id] ? FACES.filter(f => orient[n.id].faces[f]).map(f => f + ':' + orient[n.id].faces[f]).join(';') : '';
+    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', ...(researchMode ? [layer, faces] : []), p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
       .map(v => (typeof v === 'number' ? (+v).toFixed(4) : v == null ? '' : v)).join(',') + '\n';
   });
   return out;
@@ -1285,6 +1344,13 @@ $('optValues').addEventListener('change', e => { showValues = e.target.checked; 
 $('optRadius').addEventListener('change', e => { radius = clamp(parseInt(e.target.value, 10) || 0, 0, 99); recompute(); });
 $('optEntropy').addEventListener('change', e => { conv.entropy = e.target.value; recompute(); });
 $('optHFactor').addEventListener('change', e => { conv.differenceFactor = e.target.value; recompute(); });
+document.querySelectorAll('[data-mode-btn]').forEach(b => b.addEventListener('click', () => setResearchMode(b.dataset.modeBtn === 'research')));
+$('optDoorVisual').addEventListener('change', e => { doorIsVisual = e.target.checked; recompute(); });
+document.addEventListener('change', e => {
+  if (!e.target.classList || !e.target.classList.contains('layer-sel')) return;
+  layer = e.target.value;
+  recompute();
+});
 $('btnDerive').addEventListener('click', deriveAdjacency);
 
 $('bgFile').addEventListener('change', e => {
@@ -1317,6 +1383,7 @@ $('btnLoad').addEventListener('click', () => {
     const { model: m, warnings } = migrateModelWithReport(data);
     const pre = snapshot(); setModel(m); selSet.clear(); commit(pre); recompute(); fitView();
     if (warnings.length) { w.hidden = false; w.textContent = '⚠ ' + warnings.join(' '); }
+    hintResearch(m);
   } catch (err) {
     w.hidden = false;
     w.textContent = '⚠ ' + (err instanceof SyntaxError ? t('err.json') : err.message) + ' ' + t('err.expect');
@@ -1365,6 +1432,8 @@ setLang(getLang());
 applyI18n();
 $('btnLang').textContent = getLang() === 'pt' ? 'EN' : 'PT';
 document.documentElement.classList.toggle('projector', projector);
+document.body.classList.toggle('research', researchMode);
+document.querySelectorAll('[data-mode-btn]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.modeBtn === 'research') === researchMode)));
 $('btnProjector').setAttribute('aria-pressed', String(projector));
 $('bgControls').hidden = !bg.img;
 Object.entries(BG_INPUTS).forEach(([id, key]) => { $(id).value = bg[key]; });

@@ -151,6 +151,20 @@ export const GLOSSARY = {
       read: '',
       ref: '',
     },
+    layer: {
+      title: 'Camada analisada',
+      def: 'Cada par de espaços que se toca tem uma interface: opaco (parede cega), vista (permeável à vista, como o cobogó), acesso (porta) ou aberto (totalmente aberto). A camada escolhe quais interfaces viram ligação do grafo.',
+      formula: 'acesso = {acesso, aberto} · visual = {vista, aberto} + acesso (porta aberta, configurável) · adjacência = todas',
+      read: 'Acesso é o grafo de permeabilidade clássico de Hillier & Hanson. Visual mostra o que se vê de um espaço a outro. Adjacência é a vizinhança construída, base para medir a diferença entre o grafo pretendido e o construído. Compare uma mesma planta nas três camadas.',
+      ref: 'Hillier & Hanson 1984 (permeabilidade); roteiro F4 da pesquisa',
+    },
+    orientation: {
+      title: 'Orientação (faces)',
+      def: 'Para cada espaço, as faces da envoltória (Norte, Sul, Leste, Oeste) com que ele faz fronteira e a categoria de cada interface com o exterior. Um cômodo de canto tem uma ligação por face.',
+      formula: 'Contagem simples por espaço e por face; "abre para" = qualquer categoria menos opaco; "entrada" = acesso ou aberto',
+      read: 'Mostra como a casa se relaciona com o lado de fora: por onde se entra, para onde se olha, que faces ficam cegas. Só aparece quando o exterior está marcado e as faces estão registradas.',
+      ref: 'Roteiro F4 da pesquisa',
+    },
     genotype: {
       title: 'Ordem das funções (genótipo)',
       def: 'Ordena as funções (rótulos) pela integração média dos seus espaços. Quando a mesma ordem se repete em várias casas de uma cultura, ela é um "genótipo": um padrão social inscrito no espaço, por trás das variações de forma (fenótipos).',
@@ -313,6 +327,20 @@ export const GLOSSARY = {
       formula: '',
       read: '',
       ref: '',
+    },
+    layer: {
+      title: 'Analysed layer',
+      def: 'Every pair of touching spaces has an interface: opaque (blank wall), view (see-through, like a cobogó screen), access (door) or open (fully open). The layer chooses which interfaces become graph links.',
+      formula: 'access = {access, open} · visual = {view, open} + access (open door, configurable) · adjacency = all',
+      read: 'Access is the classic Hillier & Hanson permeability graph. Visual shows what can be seen from one space to another. Adjacency is the built neighbourhood, the basis for measuring the gap between intended and built graph. Compare one plan across the three layers.',
+      ref: 'Hillier & Hanson 1984 (permeability); research roadmap F4',
+    },
+    orientation: {
+      title: 'Orientation (faces)',
+      def: 'For each space, the faces of the envelope (North, South, East, West) it borders and the category of each interface with the exterior. A corner room has one link per face.',
+      formula: 'Simple count per space and face; "opens to" = any category but opaque; "entrance" = access or open',
+      read: 'Shows how the house relates to the outside: where you enter, where you look, which faces are blank. Only shown when the exterior is marked and faces are recorded.',
+      ref: 'Research roadmap F4',
     },
     genotype: {
       title: 'Function order (genotype)',
