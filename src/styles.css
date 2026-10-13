@@ -322,6 +322,14 @@ input.calib { width: 6rem; min-height: 32px; background: var(--paper); }
 .f-N { border-color: #2f5d8a; } .f-L { border-color: #2b7a4b; border-style: dashed; } .f-S { border-color: #c98a1a; border-style: dotted; } .f-O { border-color: #7a3fa0; border-style: double; border-width: 3px; }
 #northNum { width: 4.2rem; }
 
+/* ---------- exemplar ---------- */
+.chkh { font-family: var(--mono); font-size: .62rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: .6rem 0 .2rem; }
+.checklist { margin: 0; padding-left: 1.1rem; font-size: .76rem; line-height: 1.5; }
+.checklist .importante { color: var(--accent); font-weight: 600; }
+.checklist .aviso { color: var(--ink2); }
+.checklist .ok { color: var(--ok); list-style: none; margin-left: -1.1rem; }
+#grpExemplar summary .linkish { min-height: 0; font-size: .8rem; letter-spacing: 0; }
+
 /* ---------- bottom sheet ---------- */
 .sheet {
   position: fixed; z-index: 60; right: 1rem; bottom: 1rem; width: 350px; max-height: 75vh; overflow-y: auto;

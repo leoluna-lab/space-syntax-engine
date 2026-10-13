@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, LAYERS, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, LAYERS, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -249,6 +249,7 @@ function renderPanel() {
   $('btnExt').hidden = !!ext;
   if (document.activeElement !== $('northNum')) $('northNum').value = Math.round(north);
   $('northRange').value = Math.round(north);
+  renderExemplar();
   document.querySelectorAll('select.layer-sel').forEach(sel => {
     sel.innerHTML = LAYERS.map(l => `<option value="${l}">${esc(t('layer.' + l))}</option>`).join('');
     sel.value = layer;
@@ -1074,6 +1075,61 @@ function facesCreate() {
   toast(t('faces.created', { n: made, assigned: assigned ? t('faces.assigned', { n: assigned }) : '' }), t('toast.undo'), undo);
 }
 
+/* ---------------- EXEMPLAR: METADADOS, CONFERÊNCIA E EXPORTAÇÃO (F4.3/F4.4) ---------------- */
+const META_TEXT = ['exemplar_id', 'fonte', 'local', 'data', 'codificador'];
+function renderExemplar() {
+  const meta = model.meta || {}, geo = model.geo || {};
+  for (const k of [...META_TEXT, 'notas']) { const el = $('meta_' + k); if (el && document.activeElement !== el) el.value = meta[k] || ''; }
+  const cj = $('meta_conjunto');
+  cj.innerHTML = `<option value="">—</option>` + CONJUNTOS.map(c => `<option value="${c}">${esc(t('conj.' + c))}</option>`).join('');
+  cj.value = meta.conjunto || '';
+  if (document.activeElement !== $('geoModulo')) $('geoModulo').value = geo.modulo_m || '';
+  const items = exemplarChecklist(model);
+  $('exemplarCheck').innerHTML = items.length
+    ? items.map(i => `<li class="${i.level}">${esc(t('chk.' + i.code, { n: i.n ?? '' }))}</li>`).join('')
+    : `<li class="ok">${esc(t('chk.ok'))}</li>`;
+}
+/** Grava um campo de metadados (desfazível); vazio remove o campo. */
+function setMeta(key, value) {
+  const v = String(value || '').trim().slice(0, key === 'notas' ? 4000 : 300);
+  const cur = (model.meta && model.meta[key]) || '';
+  if (v === cur) return;
+  mutate(() => {
+    const m = { ...(model.meta || {}) };
+    if (v) m[key] = v; else delete m[key];
+    if (Object.keys(m).length) model.meta = m; else delete model.meta;
+  });
+}
+function exportExemplar() {
+  const sc = activeScenario(), name = exemplarFileName(model, sc.name) + '.json';
+  const j = JSON.stringify(model, null, 2);
+  download(j, name, 'application/json');
+  putIO(j, name);
+  const imp = exemplarChecklist(model).filter(i => i.level === 'importante');
+  toast(imp.length ? t('toast.exportedMissing', { name, list: imp.map(i => t('chk.' + i.code, { n: i.n ?? '' })).join('; ') }) : t('toast.exported', { name }));
+}
+function exportManifest(all) {
+  const models = all ? project.scenarios.map(s => s.model) : [model];
+  const csv = manifestCSV(models);
+  const name = all ? 'manifesto_projeto.csv' : `manifesto_${exemplarFileName(model, activeScenario().name)}.csv`;
+  download(csv, name, 'text/csv');
+  putIO(csv, name);
+}
+META_TEXT.concat('notas').forEach(k => $('meta_' + k).addEventListener('change', e => setMeta(k, e.target.value)));
+$('meta_conjunto').addEventListener('change', e => setMeta('conjunto', e.target.value));
+$('geoModulo').addEventListener('change', e => {
+  const v = parseFloat(String(e.target.value).replace(',', '.'));
+  mutate(() => {
+    const g = { ...(model.geo || {}) };
+    if (v > 0) g.modulo_m = v; else delete g.modulo_m;
+    if (Object.keys(g).length) model.geo = g; else delete model.geo;
+  });
+});
+$('btnExportEx').addEventListener('click', exportExemplar);
+$('btnManifest').addEventListener('click', () => exportManifest(false));
+$('btnManifestAll').addEventListener('click', () => exportManifest(true));
+$('exInfo').addEventListener('click', e => { e.preventDefault(); openInfo('exemplar'); });
+
 /** Legenda das categorias sob o mapa (modo Pesquisa). */
 function renderKindLegend() {
   const el = $('kindLegend');
@@ -1788,6 +1844,31 @@ $('btnLoad').addEventListener('click', () => {
     w.hidden = false;
     w.textContent = '⚠ ' + (err instanceof SyntaxError ? t('err.json') : err.message) + ' ' + t('err.expect');
   }
+});
+/** Abre um .json do disco (exemplar v1–v3 ou projeto) como cenário(s) novo(s); nada é sobrescrito. */
+$('btnOpenFile').addEventListener('click', () => $('fileOpen').click());
+$('fileOpen').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const w = $('ioWarn');
+  f.text().then(text => {
+    try {
+      const data = JSON.parse(text);
+      w.hidden = true;
+      if (data && typeof data === 'object' && 'scenarios' in data) { importScenarios(migrateProject(data)); return; }
+      const { model: m, warnings } = migrateModelWithReport(data);
+      const id = newScenarioId(project.scenarios.map(s => s.id));
+      const name = ((m.meta && m.meta.exemplar_id) || f.name.replace(/\.json$/i, '')).slice(0, 80);
+      if (addScenario({ id, name, family: id, model: m })) {
+        toast(t('toast.fileOpened', { name }));
+        if (warnings.length) { w.hidden = false; w.textContent = '⚠ ' + warnings.join(' '); $('grpIO').open = true; }
+        hintResearch(m);
+      }
+    } catch (err) {
+      w.hidden = false; $('grpIO').open = true;
+      w.textContent = '⚠ ' + f.name + ': ' + (err instanceof SyntaxError ? t('err.json') : err.message);
+    }
+  }).finally(() => { e.target.value = ''; });
 });
 $('btnReset').addEventListener('click', () => { const pre = snapshot(); setModel(migrateModel(VALIDATED)); selSet.clear(); currentMeasure = 'integ'; radius = 0; commit(pre); recompute(); fitView(); });
 $('scnSel').addEventListener('change', e => switchScenario(e.target.value));
