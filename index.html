@@ -140,6 +140,14 @@
       </div>
     </details>
 
+    <details class="grp research-only" id="grpOrient">
+      <summary data-i18n="grp.orient"></summary>
+      <div class="row"><span class="lbl" data-i18n="ext.label"></span><span id="extTxt" class="mini" style="flex:1"></span><button class="ghost" id="btnExt" data-i18n="btn.createExt"></button></div>
+      <div class="row"><span class="lbl" data-i18n="north"></span><input type="range" id="northRange" min="0" max="359" step="1"><input type="number" id="northNum" min="0" max="359" step="1" inputmode="numeric"><span class="mini">°</span></div>
+      <div class="btnrow"><button class="ghost" id="btnFaces" data-i18n="btn.faces"></button></div>
+      <p class="hint" data-i18n="hint.orient"></p>
+    </details>
+
     <details class="grp" id="grpIO">
       <summary data-i18n="grp.io"></summary>
       <div class="btnrow"><button class="ghost" id="btnExport" data-i18n="io.export"></button><button class="ghost" id="btnLoad" data-i18n="io.load"></button></div>
@@ -174,6 +182,11 @@
           <button class="icon" id="zoomFit" data-i18n-aria="zoom.fit"><svg class="ico"><use href="#i-fit"/></svg></button>
         </div>
         <div class="ctxbar" id="ctxBar" hidden></div>
+        <button class="compass research-only" id="compass" data-i18n-aria="compass">
+          <svg viewBox="-20 -20 40 40" aria-hidden="true"><circle r="18" fill="rgba(250,248,242,.92)" stroke="#d8d2c4"/>
+            <g id="compassRot"><path d="M0,-14 L5,3 L0,0 L-5,3 Z" fill="#b23a2e"/><path d="M0,14 L5,3 L0,0 L-5,3 Z" fill="#8c8679" opacity=".5"/><text y="-6" x="0" font-size="7" font-family="monospace" font-weight="700" text-anchor="middle" fill="#fff" transform="translate(0,-7)">N</text></g>
+          </svg>
+        </button>
       </div>
       <p class="foot desk-only" data-i18n="help.graph"></p>
     </section>

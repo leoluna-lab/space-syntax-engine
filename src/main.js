@@ -4,6 +4,7 @@ import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
 import { snapPoint, sharedWall } from './geometry/snap.ts';
 import { detectAdjacency, closeGaps } from './geometry/adjacency.ts';
+import { exteriorPieces, suggestFaces } from './geometry/exterior.ts';
 
 const $ = id => document.getElementById(id);
 const MONO = 'Menlo, Consolas, Courier New, monospace';
@@ -56,6 +57,7 @@ let researchMode = false;
 // Detecção de vizinhança (F4.3.3): tolerâncias em cm, convertidas pela escala do desenho (geo).
 let tolCm = 15, minContactCm = 30;
 let review = null; // { cands, sel: Set<chave do par>, focus } enquanto a revisão está aberta
+let faceRev = null; // { items, extra, sel: Set<'id|F'>, focus } enquanto a revisão de faces está aberta
 let linkKind = 'acesso'; // categoria das ligações criadas no modo Ligar (Pesquisa)
 /**
  * Traço de cada categoria no modo Pesquisa: cor E padrão distintos (daltonismo, impressão P&B).
@@ -194,6 +196,7 @@ function recompute() {
   if (linkFrom && !byId.has(linkFrom)) linkFrom = null;
   R = analyse(model);
   if (review) refreshReview();
+  if (faceRev) refreshFaces();
   renderAll();
   autosave();
 }
@@ -241,6 +244,11 @@ function renderPanel() {
   const sc = model.geo && model.geo.escala_m_por_unidade;
   $('scaleTxt').textContent = sc ? t('scale.value', { n: (1 / sc).toFixed(1) }) : t('scale.none');
   $('optTol').value = tolCm; $('optMinContact').value = minContactCm;
+  const ext = model.nodes.find(x => x.exterior), north = northDeg();
+  $('extTxt').textContent = ext ? `${ext.id} · ${ext.name}` : t('ext.none');
+  $('btnExt').hidden = !!ext;
+  if (document.activeElement !== $('northNum')) $('northNum').value = Math.round(north);
+  $('northRange').value = Math.round(north);
   document.querySelectorAll('select.layer-sel').forEach(sel => {
     sel.innerHTML = LAYERS.map(l => `<option value="${l}">${esc(t('layer.' + l))}</option>`).join('');
     sel.value = layer;
@@ -343,6 +351,8 @@ function renderGraph() {
   });
   renderKindLegend();
   if (review) drawReviewOverlay();
+  if (faceRev) drawFacesOverlay();
+  renderCompass();
   const m = meta(currentMeasure);
   model.nodes.forEach(n => {
     const p = R.per[n.id], col = colourOf(n.id), rad = nodeRadius(n.id);
@@ -619,7 +629,7 @@ function deleteNodes(ids) {
   toast(t('toast.deleted', { n: set.size }), t('toast.undo'), undo);
 }
 function setRoot(id) { mutate(() => { model.root = id; }); }
-function clearSelection() { selSet.clear(); selEdge = null; multi = false; if (!review) closeSheet(); renderGraph(); refreshSel(); }
+function clearSelection() { selSet.clear(); selEdge = null; multi = false; if (!review && !faceRev) closeSheet(); renderGraph(); refreshSel(); }
 function selectEdge(key) { selSet.clear(); multi = false; selEdge = key; renderGraph(); refreshSel(); openSheet({ kind: 'edge', key }); }
 
 function linkClick(id) {
@@ -777,7 +787,7 @@ function sheetRows() {
   return [...new Set([...first, 'integ', 'choice', 'depth', 'conn'])].slice(0, 4);
 }
 function openSheet(target) {
-  if (review && target.kind !== 'review') return; // durante a revisão, tocar no mapa não troca o painel
+  if ((review || faceRev) && target.kind !== 'review' && target.kind !== 'faces') return; // durante uma revisão, tocar no mapa não troca o painel
   sheetFor = target;
   if (target.kind === 'node' && !selSet.has(target.id)) { selSet.clear(); selSet.add(target.id); refreshSel(); }
   renderSheet();
@@ -794,8 +804,9 @@ function keepAboveSheet(id) {
 }
 function closeSheet() {
   if (!sheetFor) return;
-  const wasReview = sheetFor.kind === 'review';
-  sheetFor = null; review = wasReview ? null : review;
+  const wasReview = sheetFor.kind === 'review' || sheetFor.kind === 'faces';
+  sheetFor = null;
+  if (wasReview) { review = null; faceRev = null; }
   renderSheet();
   if (selEdge || wasReview) { selEdge = null; renderGraph(); }
 }
@@ -831,7 +842,7 @@ function openReview() {
   if (polyList().length < 2) { toast(t('toast.needPolys')); return; }
   if (mode !== 'select') setMode('select');
   setView('graph');
-  review = null; closeSheet();
+  review = null; faceRev = null; closeSheet();
   const { cands, linked } = detectNew();
   // pré-seleciona certas e prováveis; duvidosas só com confirmação
   review = { cands, linked, sel: new Set(cands.filter(c => c.confidence !== 'duvidosa').map(c => pairKey(c.a, c.b))), focus: null };
@@ -918,7 +929,150 @@ function applyCalibration() {
   mutate(() => { model.geo = { ...(model.geo || {}), escala_m_por_unidade: s }; });
   toast(t('toast.calibrated', { n: (1 / s).toFixed(1) }));
 }
-$('sheet').addEventListener('click', e => { const f = e.target.closest('[data-revfocus]'); if (f) focusPair(f.dataset.revfocus); });
+$('sheet').addEventListener('click', e => {
+  const f = e.target.closest('[data-revfocus]'); if (f) focusPair(f.dataset.revfocus);
+  const g = e.target.closest('[data-facefocus]'); if (g) focusFaceSpace(g.dataset.facefocus);
+});
+
+/* ---------------- EXTERIOR, NORTE E FACES (F4.3.4) ---------------- */
+const northDeg = () => (model.geo && Number.isFinite(model.geo.norte_graus) ? model.geo.norte_graus : 0);
+const extNode = () => model.nodes.find(n => n.exterior);
+const FACE_STY = { N: ['#2f5d8a', null], L: ['#2b7a4b', [6, 3]], S: ['#c98a1a', [2, 4]], O: ['#7a3fa0', [10, 3, 2, 3]] };
+function setNorth(deg) {
+  const d = ((Math.round(deg) % 360) + 360) % 360;
+  if (d === northDeg() && model.geo && model.geo.norte_graus !== undefined) return;
+  mutate(() => { model.geo = { ...(model.geo || {}), norte_graus: d }; });
+}
+/** Seta do norte no canto do mapa (modo Pesquisa). */
+function renderCompass(preview) {
+  const g = $('compassRot');
+  if (g) g.setAttribute('transform', `rotate(${preview ?? northDeg()})`);
+}
+/** Ao tirar a marca de exterior de um espaço, as faces das suas ligações deixam de valer (schema v3). */
+function stripFaces(id) {
+  let n = 0;
+  model.edges.forEach(e => { if ((e.a === id || e.b === id) && e.face) { delete e.face; n++; } });
+  return n;
+}
+function toggleExterior(id) {
+  const n = byId.get(id);
+  if (!n) return;
+  let cleared = 0;
+  if (n.exterior) {
+    mutate(() => { delete n.exterior; cleared = stripFaces(id); });
+    toast(t('toast.extUnset', { id }) + (cleared ? ' ' + t('toast.extFacesCleared', { n: cleared }) : ''), t('toast.undo'), undo);
+    return;
+  }
+  const prev = extNode();
+  mutate(() => { if (prev) { delete prev.exterior; cleared = stripFaces(prev.id); } n.exterior = true; });
+  toast((prev ? t('toast.extMoved', { a: prev.id, b: id }) : t('toast.extSet', { id })) + (cleared ? ' ' + t('toast.extFacesCleared', { n: cleared }) : ''), t('toast.undo'), undo);
+}
+/** Cria o nó exterior (portador) acima do desenho e o define como raiz. */
+function createExterior() {
+  const ex = extNode();
+  if (ex) { toast(t('toast.extExists', { id: ex.id })); return; }
+  const b = contentBounds(ASPECT, 0, model, false, 0), used = new Set(model.nodes.map(n => n.id));
+  const id = used.has('ext') ? nextId() : 'ext';
+  mutate(() => {
+    model.nodes.push({ id, name: t('scn.exterior'), x: Math.round(b.x + b.w / 2), y: Math.round(b.y - 30), label: t('scn.exterior'), exterior: true });
+    model.root = id;
+  });
+  toast(t('toast.extCreated'), t('toast.undo'), undo);
+}
+function computeFaces() {
+  const ext = extNode(), u = adjUnits();
+  const polys = polyList().filter(p => p.id !== ext.id);
+  const sugg = suggestFaces(exteriorPieces(polys, northDeg(), u.tol, u.min));
+  const other = e => (e.a === ext.id ? e.b : e.a);
+  const extEdges = model.edges.filter(e => e.a === ext.id || e.b === ext.id);
+  const items = sugg.map(s => {
+    const ex = extEdges.find(e => other(e) === s.id && e.face === s.face);
+    return { ...s, exists: !!ex, existsKind: ex ? ex.kind : null, faceless: extEdges.some(e => other(e) === s.id && !e.face) };
+  });
+  const sk = new Set(sugg.map(s => s.id + '|' + s.face));
+  // faces já gravadas que a geometria não confirma (para conferir)
+  const extra = extEdges.filter(e => e.face && !sk.has(other(e) + '|' + e.face)).map(e => `${other(e)} · ${e.face} (${t('kind.' + e.kind)})`);
+  return { items, extra };
+}
+function openFaceReview() {
+  if (!extNode()) { toast(t('toast.needExt'), t('btn.createExt'), createExterior); return; }
+  if (!polyList().length) { toast(t('toast.needPolys')); return; }
+  if (mode !== 'select') setMode('select');
+  setView('graph');
+  review = null; faceRev = null; closeSheet();
+  const { items, extra } = computeFaces();
+  faceRev = { items, extra, sel: new Set(items.filter(i => !i.exists).map(i => i.id + '|' + i.face)), focus: null };
+  sheetFor = { kind: 'faces' }; renderSheet(); renderGraph();
+}
+function refreshFaces() {
+  if (!extNode()) { faceRev = null; if (sheetFor && sheetFor.kind === 'faces') sheetFor = null; return; }
+  const keep = faceRev.sel, { items, extra } = computeFaces();
+  faceRev.items = items; faceRev.extra = extra;
+  faceRev.sel = new Set(items.filter(i => !i.exists).map(i => i.id + '|' + i.face).filter(k => keep.has(k)));
+}
+function facesHTML(closeBtn) {
+  const geoN = model.geo && model.geo.norte_graus !== undefined;
+  const ids = [...new Set(faceRev.items.map(i => i.id))];
+  const n = faceRev.sel.size;
+  let h = `<div class="sheet-handle"></div><div class="sheet-head"><h3>${esc(t('faces.title'))}</h3>${closeBtn}</div>
+    <p class="hint">${esc(geoN ? t('faces.info', { deg: Math.round(northDeg()) }) : t('faces.noNorth'))} <button class="linkish" data-info="orientation">ⓘ</button></p>`;
+  if (!ids.length) h += `<p>${esc(t('faces.none'))}</p>`;
+  h += ids.map(id => {
+    const items = faceRev.items.filter(i => i.id === id), nd = byId.get(id);
+    const chips = items.map(i => {
+      const k = i.id + '|' + i.face;
+      if (i.exists) return `<span class="facechip done f-${i.face}"><b>${i.face}</b><small>${esc(t('faces.exists', { kind: t('kind.' + i.existsKind) }))}</small></span>`;
+      return `<label class="facechip f-${i.face}"><input type="checkbox" data-facesel="${esc(k)}" ${faceRev.sel.has(k) ? 'checked' : ''}><b>${i.face}</b><small>${fmtLen(i.length)}</small></label>`;
+    }).join('');
+    const firstSel = items.find(i => !i.exists && faceRev.sel.has(i.id + '|' + i.face));
+    const note = items[0].faceless && firstSel ? `<p class="hint" style="margin:.2rem 0 0">${esc(t('faces.assign', { face: firstSel.face }))}</p>` : '';
+    return `<div class="facegroup${faceRev.focus === id ? ' focus' : ''}"><button class="linkish revname" data-facefocus="${esc(id)}"><b>${esc(id)}</b> <small>${esc(nd ? nd.name : '')}</small></button><div class="facechips">${chips}</div>${note}</div>`;
+  }).join('');
+  if (faceRev.extra.length) h += `<p class="warn" style="margin-top:.5rem">${esc(t('faces.mismatch', { list: faceRev.extra.join('; ') }))}</p>`;
+  h += `<div class="sheet-actions"><button data-act="facesCreate" ${n ? '' : 'disabled'}>${esc(t('faces.create', { n }))}</button></div>`;
+  return h;
+}
+/** Trechos voltados para fora, coloridos por face (cor + traço distintos) e com a letra da face. */
+function drawFacesOverlay() {
+  const k = pxPerUnit();
+  faceRev.items.forEach(i => {
+    const on = i.exists || faceRev.sel.has(i.id + '|' + i.face), [col, dash] = FACE_STY[i.face];
+    i.segs.forEach(([p, q]) => {
+      const a = { x1: p[0], y1: p[1], x2: q[0], y2: q[1], stroke: col, 'stroke-width': (faceRev.focus === i.id ? 10 : 6) / k, 'stroke-opacity': on ? 0.85 : 0.25, 'pointer-events': 'none' };
+      if (dash) a['stroke-dasharray'] = dash.map(d => d / k).join(' ');
+      svgG.appendChild(Eo('line', a));
+      const lb = txt((p[0] + q[0]) / 2, (p[1] + q[1]) / 2 + 4 / k, i.face, 12 / k, col, '700', 'facelabel');
+      lb.setAttribute('pointer-events', 'none'); lb.setAttribute('stroke', '#fff'); lb.setAttribute('stroke-width', 3 / k); lb.setAttribute('paint-order', 'stroke');
+      svgG.appendChild(lb);
+    });
+  });
+}
+function focusFaceSpace(id) {
+  const n = byId.get(id);
+  if (!n || !faceRev) return;
+  faceRev.focus = id;
+  const r = svgG.getBoundingClientRect();
+  placeCam(n.x, n.y, r.left + r.width / 2, r.top + r.height * 0.35, cam.w);
+  renderGraph(); renderSheet();
+}
+/** Grava as faces marcadas: ligações novas com o exterior (opaco) ou face atribuída à ligação existente sem face. */
+function facesCreate() {
+  const ext = extNode();
+  if (!ext || !faceRev) return;
+  const other = e => (e.a === ext.id ? e.b : e.a);
+  const chosen = faceRev.items.filter(i => !i.exists && faceRev.sel.has(i.id + '|' + i.face));
+  let made = 0, assigned = 0;
+  faceRev = null; sheetFor = null;
+  mutate(() => {
+    const usedFaceless = new Set();
+    for (const i of chosen) {
+      const faceless = model.edges.find(e => (e.a === ext.id || e.b === ext.id) && other(e) === i.id && !e.face && !usedFaceless.has(e));
+      if (faceless) { faceless.face = i.face; usedFaceless.add(faceless); assigned++; }
+      else { model.edges.push({ a: ext.id, b: i.id, kind: 'opaco', face: i.face }); made++; }
+    }
+  });
+  toast(t('faces.created', { n: made, assigned: assigned ? t('faces.assigned', { n: assigned }) : '' }), t('toast.undo'), undo);
+}
 
 /** Legenda das categorias sob o mapa (modo Pesquisa). */
 function renderKindLegend() {
@@ -934,6 +1088,7 @@ function renderSheet() {
   if (!sheetFor) { s.hidden = true; s.innerHTML = ''; return; }
   const closeBtn = `<button class="icon" data-act="close" aria-label="${esc(t('close'))}"><svg class="ico"><use href="#i-close"/></svg></button>`;
   if (sheetFor.kind === 'review') { s.innerHTML = reviewHTML(closeBtn); s.hidden = false; return; }
+  if (sheetFor.kind === 'faces') { s.innerHTML = facesHTML(closeBtn); s.hidden = false; return; }
   if (sheetFor.kind === 'edge') {
     const e = findEdge(sheetFor.key), na = byId.get(e.a), nb = byId.get(e.b);
     s.innerHTML = `<div class="sheet-handle"></div>
@@ -949,7 +1104,7 @@ function renderSheet() {
         <span class="chip" style="background:${colourOf(n.id)}"></span><span class="idbadge">${esc(n.id)}</span>
         <input type="text" id="sheetName" value="${esc(n.name)}" maxlength="200" aria-label="${esc(t('name'))}">${closeBtn}
       </div>
-      <div class="sheet-type">${isRoot ? `<span class="badge">${esc(t('root.badge'))}</span>` : ''}
+      <div class="sheet-type">${isRoot ? `<span class="badge">${esc(t('root.badge'))}</span>` : ''}${n.exterior && researchMode ? `<span class="badge ext">${esc(t('badge.ext'))}</span>` : ''}
         <button class="linkish" data-info="type">${esc(t('type'))} <b>${p.type}</b> — ${esc(t('type.' + p.type))}</button></div>
       <label class="labelrow"><span>${esc(t('label'))}</span><input type="text" id="sheetLabel" list="labelOptions" value="${esc(n.label || '')}" maxlength="60" placeholder="${esc(t('label.ph'))}" autocomplete="off"></label>
       ${facesLine(n.id)}
@@ -957,6 +1112,7 @@ function renderSheet() {
       ${narrow.matches ? `<button class="linkish more" data-act="more" aria-expanded="${sheetExpanded}">${esc(t(sheetExpanded ? 'sheet.less' : 'sheet.more'))}</button>` : ''}
       <div class="sheet-actions">
         <button class="ghost" data-act="root" ${isRoot ? 'disabled' : ''}><svg class="ico"><use href="#i-root"/></svg>${esc(t('act.root'))}</button>
+        ${researchMode ? `<button class="ghost" data-act="toggleExt">${esc(t(n.exterior ? 'act.unExt' : 'act.setExt'))}</button>` : ''}
         <button class="ghost" data-act="link"><svg class="ico"><use href="#i-link"/></svg>${esc(t('act.linkTo'))}</button>
         <button class="danger" data-act="delete"><svg class="ico"><use href="#i-trash"/></svg>${esc(t('act.delete'))}</button>
       </div>`;
@@ -979,9 +1135,15 @@ $('sheet').addEventListener('click', e => {
     case 'setKind': setEdgeKind(target.key, b.dataset.k); break;
     case 'revWeld': reviewWeld(); break;
     case 'revCreate': reviewCreate(); break;
+    case 'facesCreate': facesCreate(); break;
+    case 'toggleExt': toggleExterior(target.id); break;
   }
 });
 $('sheet').addEventListener('change', e => {
+  if (e.target.dataset && e.target.dataset.facesel && faceRev) {
+    if (e.target.checked) faceRev.sel.add(e.target.dataset.facesel); else faceRev.sel.delete(e.target.dataset.facesel);
+    renderSheet(); renderGraph(); return;
+  }
   if (e.target.dataset && e.target.dataset.rev && review) {
     if (e.target.checked) review.sel.add(e.target.dataset.rev); else review.sel.delete(e.target.dataset.rev);
     renderSheet(); renderGraph(); return;
@@ -1578,6 +1740,15 @@ document.addEventListener('change', e => {
 });
 $('btnDerive').addEventListener('click', openReview);
 $('btnCalib').addEventListener('click', () => { setView('graph'); setMode('measure'); });
+$('btnExt').addEventListener('click', createExterior);
+$('btnFaces').addEventListener('click', openFaceReview);
+$('northRange').addEventListener('input', e => { $('northNum').value = e.target.value; renderCompass(+e.target.value); });
+$('northRange').addEventListener('change', e => setNorth(+e.target.value));
+$('northNum').addEventListener('change', e => setNorth(parseFloat(e.target.value) || 0));
+$('compass').addEventListener('click', () => {
+  if (narrow.matches) setView('model');
+  const g = $('grpOrient'); g.open = true; g.scrollIntoView({ block: 'center' }); $('northNum').focus();
+});
 $('optTol').addEventListener('change', e => { tolCm = clamp(parseFloat(e.target.value) || 15, 0.5, 500); autosave(); if (review) { refreshReview(); renderSheet(); renderGraph(); } renderPanel(); });
 $('optMinContact').addEventListener('change', e => { minContactCm = clamp(parseFloat(e.target.value) || 30, 1, 2000); autosave(); if (review) { refreshReview(); renderSheet(); renderGraph(); } renderPanel(); });
 $('ctxBar').addEventListener('keydown', e => { if (e.target.id === 'calibM' && e.key === 'Enter') applyCalibration(); });

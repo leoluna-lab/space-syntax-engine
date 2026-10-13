@@ -90,10 +90,10 @@ export function minWidth(p: Pt[]): number {
   return Number.isFinite(best) ? best : 0;
 }
 
-interface Contact { len: number; gap: number; seg: [Pt, Pt] }
+export interface Contact { len: number; gap: number; seg: [Pt, Pt]; /** trecho [lo, hi] medido ao longo do lado de a */ lo: number; hi: number }
 
 /** Trecho em que o lado b1–b2 corre paralelo e próximo ao lado a1–a2. */
-function edgeContact(a1: Pt, a2: Pt, b1: Pt, b2: Pt, maxGap: number, sinMax: number): Contact | null {
+export function edgeContact(a1: Pt, a2: Pt, b1: Pt, b2: Pt, maxGap: number, sinMax: number): Contact | null {
   const ea = sub(a2, a1), la = len(ea), eb = sub(b2, b1), lb = len(eb);
   if (la < 1e-9 || lb < 1e-9) return null;
   const ua: Pt = [ea[0] / la, ea[1] / la], ub: Pt = [eb[0] / lb, eb[1] / lb];
@@ -107,7 +107,7 @@ function edgeContact(a1: Pt, a2: Pt, b1: Pt, b2: Pt, maxGap: number, sinMax: num
   const pLo: Pt = [a1[0] + ua[0] * lo, a1[1] + ua[1] * lo], pHi: Pt = [a1[0] + ua[0] * hi, a1[1] + ua[1] * hi];
   const dist = (p: Pt) => Math.abs(cross(ub, sub(p, b1)));
   const gap = Math.max(dist(pLo), dist(pHi));
-  return gap <= maxGap ? { len: hi - lo, gap, seg: [pLo, pHi] } : null;
+  return gap <= maxGap ? { len: hi - lo, gap, seg: [pLo, pHi], lo, hi } : null;
 }
 
 /** Classifica um par de polígonos; null se não forem vizinhos nem suspeitos. */

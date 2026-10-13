@@ -305,6 +305,23 @@ body:not(.research) .research-only { display: none !important; }
 .revrow .tag { grid-column: 3; grid-row: 1 / span 2; white-space: normal; text-align: center; }
 input.calib { width: 6rem; min-height: 32px; background: var(--paper); }
 
+/* ---------- exterior e faces ---------- */
+.compass { position: absolute; left: .5rem; bottom: .5rem; width: 48px; height: 48px; padding: 0; background: transparent; border: none; min-height: 0; }
+.compass svg { width: 48px; height: 48px; }
+.badge.ext { background: #2f5d8a; }
+.facegroup { border: 1px solid var(--rule); border-radius: 6px; padding: .35rem .5rem; margin-bottom: .35rem; background: var(--field); }
+.facegroup.focus { box-shadow: 0 0 0 2px var(--accent); }
+.facechips { display: flex; gap: .3rem; flex-wrap: wrap; margin-top: .25rem; }
+.facechip {
+  display: inline-flex; align-items: center; gap: .3rem; border: 2px solid var(--rule); border-radius: 999px;
+  padding: .15rem .55rem; font-family: var(--mono); font-size: .72rem; cursor: pointer; min-height: 34px;
+}
+.facechip input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.facechip small { color: var(--muted); }
+.facechip.done { cursor: default; opacity: .7; border-style: dotted; }
+.f-N { border-color: #2f5d8a; } .f-L { border-color: #2b7a4b; border-style: dashed; } .f-S { border-color: #c98a1a; border-style: dotted; } .f-O { border-color: #7a3fa0; border-style: double; border-width: 3px; }
+#northNum { width: 4.2rem; }
+
 /* ---------- bottom sheet ---------- */
 .sheet {
   position: fixed; z-index: 60; right: 1rem; bottom: 1rem; width: 350px; max-height: 75vh; overflow-y: auto;
