@@ -3,3 +3,5 @@ export * from './graph';
 export * from './analyse';
 export * from './project';
 export * from './compare';
+export * from './layers';
+export * from './exemplar';

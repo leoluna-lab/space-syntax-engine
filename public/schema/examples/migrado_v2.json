@@ -1,0 +1,27 @@
+{
+  "schema": 3,
+  "nodes": [
+    { "id": "X", "name": "Exterior (carrier)", "x": 90, "y": 235 },
+    { "id": "E", "name": "Central corridor", "x": 250, "y": 235 },
+    { "id": "B", "name": "Top-middle room", "x": 250, "y": 95 },
+    { "id": "C", "name": "Top-right room", "x": 400, "y": 120 },
+    { "id": "D", "name": "Bottom-left room", "x": 245, "y": 375 },
+    { "id": "I", "name": "Bottom-right room", "x": 470, "y": 265 },
+    { "id": "A", "name": "Top-left room", "x": 110, "y": 375 },
+    { "id": "F", "name": "Bottom-center room", "x": 390, "y": 390 },
+    { "id": "G", "name": "Upper small room", "x": 610, "y": 255 },
+    { "id": "H", "name": "Lower small room", "x": 470, "y": 440 }
+  ],
+  "edges": [
+    { "a": "A", "b": "D", "kind": "acesso" },
+    { "a": "D", "b": "E", "kind": "acesso" },
+    { "a": "D", "b": "F", "kind": "acesso" },
+    { "a": "E", "b": "B", "kind": "acesso" },
+    { "a": "E", "b": "C", "kind": "acesso" },
+    { "a": "E", "b": "I", "kind": "acesso" },
+    { "a": "F", "b": "H", "kind": "acesso" },
+    { "a": "I", "b": "G", "kind": "acesso" },
+    { "a": "X", "b": "E", "kind": "acesso" }
+  ],
+  "root": "X"
+}

@@ -1,6 +1,5 @@
-import type { Model } from '../src/engine';
-
-type Lite = Pick<Model, 'nodes' | 'edges' | 'root'>;
+/** Topologia com nomes/posições: entra direto no motor e também é um modelo v1/v2 válido. */
+type Lite = { nodes: { id: string; name: string; x: number; y: number; label?: string }[]; edges: [string, string][]; root: string | null };
 
 /** Modelo validado de 10 nós (mesmo do VALIDATED da UI e do relatório space_syntax_analysis). */
 export const VALIDATED: Lite = {

@@ -34,6 +34,7 @@
 <div class="app">
   <header class="appbar">
     <div class="brand">Space Syntax Engine<small data-i18n="brand.sub"></small></div>
+    <span class="modebadge research-only" data-i18n="mode.research"></span>
     <select id="scnSel" class="scnsel" data-i18n-aria="scn.select"></select>
     <nav class="toptabs" role="tablist">
       <button class="tab" role="tab" data-view="graph" data-i18n="tab.graph"></button>
@@ -49,6 +50,15 @@
   </header>
 
   <aside class="panel" id="panel">
+    <details class="grp" open id="grpMode">
+      <summary data-i18n="grp.mode"></summary>
+      <div class="seg modeseg" role="group">
+        <button data-mode-btn="simple" aria-pressed="true" data-i18n="mode.simple"></button>
+        <button data-mode-btn="research" aria-pressed="false" data-i18n="mode.research"></button>
+      </div>
+      <p class="hint" data-i18n="hint.mode"></p>
+    </details>
+
     <details class="grp" open id="grpScn">
       <summary><span data-i18n="grp.scn"></span> <span id="sCount" class="count"></span></summary>
       <div class="row"><span class="lbl" data-i18n="scn.rename"></span><input type="text" id="scnName" maxlength="80"></div>
@@ -90,6 +100,7 @@
         <select id="optEntropy"><option value="depthmapx" data-i18n="conv.entropy.dm"></option><option value="excludeSelf" data-i18n="conv.entropy.v1"></option></select></div>
       <div class="row"><span class="lbl" data-i18n="conv.h"></span>
         <select id="optHFactor"><option value="ra" data-i18n="conv.h.ra"></option><option value="integration" data-i18n="conv.h.int"></option></select></div>
+      <label class="chk research-only"><input type="checkbox" id="optDoorVisual"> <span data-i18n="opt.doorVisual"></span></label>
       <p class="hint" data-i18n="hint.conv"></p>
     </details>
 
@@ -109,6 +120,9 @@
 
     <details class="grp">
       <summary data-i18n="grp.convex"></summary>
+      <div class="row"><span class="lbl" data-i18n="scale"></span><span id="scaleTxt" class="mini" style="flex:1"></span><button class="ghost" id="btnCalib" data-i18n="btn.calib"></button></div>
+      <div class="row"><span class="lbl" data-i18n="opt.tol"></span><input type="number" id="optTol" min="0.5" max="500" step="1" inputmode="decimal"><span class="mini">cm</span></div>
+      <div class="row"><span class="lbl" data-i18n="opt.minContact"></span><input type="number" id="optMinContact" min="1" max="2000" step="1" inputmode="decimal"><span class="mini">cm</span></div>
       <div class="btnrow"><button class="ghost" id="btnDerive" data-i18n="btn.derive"></button></div>
       <p class="hint" data-i18n="hint.convex"></p>
     </details>
@@ -126,9 +140,38 @@
       </div>
     </details>
 
+    <details class="grp research-only" id="grpOrient">
+      <summary data-i18n="grp.orient"></summary>
+      <div class="row"><span class="lbl" data-i18n="ext.label"></span><span id="extTxt" class="mini" style="flex:1"></span><button class="ghost" id="btnExt" data-i18n="btn.createExt"></button></div>
+      <div class="row"><span class="lbl" data-i18n="north"></span><input type="range" id="northRange" min="0" max="359" step="1"><input type="number" id="northNum" min="0" max="359" step="1" inputmode="numeric"><span class="mini">°</span></div>
+      <div class="btnrow"><button class="ghost" id="btnFaces" data-i18n="btn.faces"></button></div>
+      <p class="hint" data-i18n="hint.orient"></p>
+    </details>
+
+    <details class="grp research-only" id="grpExemplar">
+      <summary><span data-i18n="grp.exemplar"></span> <button class="linkish" id="exInfo" data-i18n-aria="aboutMeasure">ⓘ</button></summary>
+      <div class="row"><span class="lbl" data-i18n="meta.exemplar_id"></span><input type="text" id="meta_exemplar_id" maxlength="300" autocomplete="off"></div>
+      <div class="row"><span class="lbl" data-i18n="meta.conjunto"></span><select id="meta_conjunto"></select></div>
+      <div class="row"><span class="lbl" data-i18n="meta.fonte"></span><input type="text" id="meta_fonte" maxlength="300"></div>
+      <div class="row"><span class="lbl" data-i18n="meta.local"></span><input type="text" id="meta_local" maxlength="300"></div>
+      <div class="row"><span class="lbl" data-i18n="meta.data"></span><input type="text" id="meta_data" maxlength="300" data-i18n-ph="meta.data.ph"></div>
+      <div class="row"><span class="lbl" data-i18n="meta.codificador"></span><input type="text" id="meta_codificador" maxlength="300" autocomplete="name"></div>
+      <div class="row"><span class="lbl" data-i18n="geo.modulo"></span><input type="number" id="geoModulo" min="0" step="0.01" inputmode="decimal"><span class="mini">m</span></div>
+      <textarea id="meta_notas" maxlength="4000" data-i18n-ph="meta.notas.ph" style="min-height:3.5rem"></textarea>
+      <h4 class="chkh" data-i18n="chk.title"></h4>
+      <ul class="checklist" id="exemplarCheck"></ul>
+      <div class="btnrow">
+        <button id="btnExportEx" data-i18n="btn.exportEx"></button>
+        <button class="ghost" id="btnManifest" data-i18n="btn.manifest"></button>
+        <button class="ghost" id="btnManifestAll" data-i18n="btn.manifestAll"></button>
+      </div>
+      <p class="hint"><a href="./protocolo.html" target="_blank" rel="noopener" data-i18n="link.protocol"></a></p>
+    </details>
+
     <details class="grp" id="grpIO">
       <summary data-i18n="grp.io"></summary>
       <div class="btnrow"><button class="ghost" id="btnExport" data-i18n="io.export"></button><button class="ghost" id="btnLoad" data-i18n="io.load"></button></div>
+      <div class="btnrow"><button class="ghost" id="btnOpenFile" data-i18n="io.openFile"></button><input type="file" id="fileOpen" accept=".json,application/json" hidden></div>
       <textarea id="io" spellcheck="false" data-i18n-ph="ph.io" style="margin-top:.4rem"></textarea>
       <div class="note" id="ioNote" hidden></div>
       <div class="warn" id="ioWarn" hidden style="margin-top:.5rem"></div>
@@ -140,9 +183,11 @@
     <section class="view" id="view-graph" role="tabpanel">
       <div class="viewhead">
         <label class="measure-pick"><span data-i18n="colourBy"></span><select id="measureSel"></select></label>
+        <label class="measure-pick layer-pick research-only"><span data-i18n="layer"></span><select class="layer-sel" data-i18n-aria="layer"></select></label>
         <button class="icon" id="measureInfo" data-i18n-aria="aboutMeasure"><svg class="ico"><use href="#i-info"/></svg></button>
         <div class="legend" aria-hidden="true"><span id="legLo"></span><span class="ramp"></span><span id="legHi"></span></div>
       </div>
+      <div class="kindlegend research-only" id="kindLegend"></div>
       <div class="warn" id="warnBox" hidden></div>
       <div class="canvaswrap">
         <svg class="graph" id="svgGraph" viewBox="0 0 760 480" preserveAspectRatio="xMidYMid meet"></svg>
@@ -158,6 +203,11 @@
           <button class="icon" id="zoomFit" data-i18n-aria="zoom.fit"><svg class="ico"><use href="#i-fit"/></svg></button>
         </div>
         <div class="ctxbar" id="ctxBar" hidden></div>
+        <button class="compass research-only" id="compass" data-i18n-aria="compass">
+          <svg viewBox="-20 -20 40 40" aria-hidden="true"><circle r="18" fill="rgba(250,248,242,.92)" stroke="#d8d2c4"/>
+            <g id="compassRot"><path d="M0,-14 L5,3 L0,0 L-5,3 Z" fill="#b23a2e"/><path d="M0,14 L5,3 L0,0 L-5,3 Z" fill="#8c8679" opacity=".5"/><text y="-6" x="0" font-size="7" font-family="monospace" font-weight="700" text-anchor="middle" fill="#fff" transform="translate(0,-7)">N</text></g>
+          </svg>
+        </button>
       </div>
       <p class="foot desk-only" data-i18n="help.graph"></p>
     </section>
@@ -168,9 +218,11 @@
     </section>
 
     <section class="view" id="view-results" role="tabpanel">
+      <label class="measure-pick layer-pick res-layer research-only"><span data-i18n="layer"></span><select class="layer-sel" data-i18n-aria="layer"></select></label>
       <div class="valbox" id="valBox"></div>
       <div class="cards" id="globalCards"></div>
       <div class="valbox funcbox" id="funcBox"></div>
+      <div class="valbox funcbox" id="orientBox" hidden></div>
       <label class="sortbar"><span data-i18n="sortBy"></span><select id="sortSel"></select></label>
       <div class="tablewrap"><table id="resTable"><thead></thead><tbody></tbody></table></div>
       <div class="spacecards" id="spaceCards"></div>
@@ -186,6 +238,7 @@
           <button role="tab" data-cv="jgraph" data-i18n="cv.jgraph"></button>
         </div>
         <label class="measure-pick"><span data-i18n="colourBy"></span><select id="cmpMeasure"></select></label>
+        <label class="measure-pick layer-pick research-only"><span data-i18n="layer"></span><select class="layer-sel" data-i18n-aria="layer"></select></label>
       </div>
       <div class="chips" id="cmpChips"></div>
       <div id="compareBox"></div>

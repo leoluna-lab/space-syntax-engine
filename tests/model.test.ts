@@ -3,8 +3,8 @@ import { migrateModel, ModelError, SCHEMA_VERSION } from '../src/engine';
 import { escapeHtml } from '../src/util/html';
 import { VALIDATED } from './fixtures';
 
-describe('migrateModel (esquema v1 → v2)', () => {
-  it('modelo v1 (sem "schema") vira v2 sem perder dados', () => {
+describe('migrateModel (esquema v1/v2 → v3)', () => {
+  it('modelo v1 (sem "schema") vira v3 sem perder dados', () => {
     const m = migrateModel(structuredClone(VALIDATED));
     expect(m.schema).toBe(SCHEMA_VERSION);
     expect(m.nodes).toHaveLength(10);
@@ -23,7 +23,7 @@ describe('migrateModel (esquema v1 → v2)', () => {
       nodes: [{ id: 'a' }, { id: 'b' }, { id: 1 }],
       edges: [['a', 'b'], ['b', 'a'], ['a', 'a'], ['a', 'zz'], ['b', 1], 'lixo', ['a']],
     });
-    expect(m.edges).toEqual([['a', 'b'], ['b', '1']]);
+    expect(m.edges).toEqual([{ a: 'a', b: 'b', kind: 'acesso' }, { a: 'b', b: '1', kind: 'acesso' }]);
     expect(m.root).toBe('a');
     expect(m.nodes[2]).toMatchObject({ id: '1', name: '1' });
   });

@@ -1,7 +1,10 @@
-import { analyse as runAnalysis, migrateModel, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, LAYERS, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
+import { snapPoint, sharedWall } from './geometry/snap.ts';
+import { detectAdjacency, closeGaps } from './geometry/adjacency.ts';
+import { exteriorPieces, suggestFaces } from './geometry/exterior.ts';
 
 const $ = id => document.getElementById(id);
 const MONO = 'Menlo, Consolas, Courier New, monospace';
@@ -33,7 +36,8 @@ let bg = { img: null, op: 0.5, rot: 0, scale: 1, dx: 0, dy: 0 };
 let mode = 'select', view = 'graph';
 let selSet = new Set(), selEdge = null, multi = false, sheetFor = null;
 let linkFrom = null;
-const poly = { pts: [], cursor: null };
+// snap: onde o próximo ponto vai grudar (ímã); wall: lado vizinho tocado no 1º ponto (parede compartilhada)
+const poly = { pts: [], cursor: null, snap: null, wall: null };
 let cam = { x: 0, y: 0, w: W0, h: H0 };
 let sortKey = 'integ', sortDir = -1;
 let lastMouse = { x: W0 / 2, y: H0 / 2 }, lastPointerType = 'mouse';
@@ -43,9 +47,55 @@ const histBy = new Map(); // histórico de desfazer por cenário
 const svgG = $('svgGraph'), svgJ = $('svgJ'), tip = $('tip');
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const snapV = v => (snap ? Math.round(v / gridSize) * gridSize : Math.round(v * 10) / 10);
-const sameEdge = (e, a, b) => (e[0] === a && e[1] === b) || (e[0] === b && e[1] === a);
+// Ligações v3: {a, b, kind, face?}. A seleção guarda a chave (par + face), única por modelo.
+const findEdge = key => model.edges.find(e => edgeKey(e) === key);
 
-function analyse(m) { return runAnalysis(m, { ...conv, radius }); }
+// Camada analisada (roteiro F4): acesso = {acesso, aberto}; visual = {vista, aberto} + porta; adjacência = todas.
+// Modo Simples (padrão) = o grafo de permeabilidade de sempre: só a camada acesso, sem tipos, faces nem camadas na tela.
+// Modo Pesquisa = interfaces tipadas, camadas e orientação NSLO. Os dados são os mesmos; muda o que se vê e se analisa.
+let researchMode = false;
+// Detecção de vizinhança (F4.3.3): tolerâncias em cm, convertidas pela escala do desenho (geo).
+let tolCm = 15, minContactCm = 30;
+let review = null; // { cands, sel: Set<chave do par>, focus } enquanto a revisão está aberta
+let faceRev = null; // { items, extra, sel: Set<'id|F'>, focus } enquanto a revisão de faces está aberta
+let linkKind = 'acesso'; // categoria das ligações criadas no modo Ligar (Pesquisa)
+/**
+ * Traço de cada categoria no modo Pesquisa: cor E padrão distintos (daltonismo, impressão P&B).
+ * opaco = pontilhado cinza · vista = tracejado azul · acesso = contínuo · aberto = linha dupla espessa.
+ */
+const KIND_STYLE = {
+  opaco: { stroke: '#8c8679', width: 1.6, dash: '1 4', cap: 'round' },
+  vista: { stroke: '#2f5d8a', width: 1.8, dash: '7 4' },
+  acesso: { stroke: '#2a2824', width: 2 },
+  aberto: { stroke: '#2a2824', width: 6, inner: '#faf8f2', innerWidth: 2.2 },
+};
+/** Linha(s) SVG de uma categoria entre dois pontos (usada no mapa, na legenda e nos botões). */
+function kindLines(kind, x1, y1, x2, y2, opacity = 1, extraClass = '') {
+  const s = KIND_STYLE[kind], out = [];
+  const base = { x1, y1, x2, y2, stroke: s.stroke, 'stroke-width': s.width, 'stroke-opacity': opacity, 'stroke-linecap': s.cap || 'butt', class: ('edge-r ' + extraClass).trim() };
+  if (s.dash) base['stroke-dasharray'] = s.dash;
+  out.push(Eo('line', base));
+  if (s.inner) out.push(Eo('line', { x1, y1, x2, y2, stroke: s.inner, 'stroke-width': s.innerWidth, 'stroke-opacity': opacity, class: 'edge-inner' }));
+  return out;
+}
+const kindSwatch = k => `<svg class="kindsw" viewBox="0 0 44 12" aria-hidden="true">${kindLines(k, 3, 6, 41, 6).map(el => el.outerHTML).join('')}</svg>`;
+let layer = 'acesso', doorIsVisual = true;
+const effLayer = () => (researchMode ? layer : 'acesso');
+const layerOpts = () => ({ doorIsVisual });
+const inLayer = e => layerKinds(effLayer(), layerOpts()).has(e.kind);
+const pairsOf = m => layerInput(m, effLayer(), layerOpts()).edges;
+function analyse(m, r = radius) { return runAnalysis(layerInput(m, effLayer(), layerOpts()), { ...conv, radius: r }); }
+/** O modelo tem informação que só o modo Pesquisa mostra? (o exterior marcado sozinho não conta) */
+const hasResearchData = m => m.edges.some(e => e.kind !== 'acesso' || e.face);
+function setResearchMode(on) {
+  researchMode = !!on;
+  document.body.classList.toggle('research', researchMode);
+  document.querySelectorAll('[data-mode-btn]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.modeBtn === 'research') === researchMode)));
+  if (!researchMode && selEdge && !inLayer(findEdge(selEdge) || {})) selEdge = null;
+  recompute();
+}
+/** No modo Simples, avisa que o modelo tem dados de pesquisa escondidos (nada se perde). */
+function hintResearch(m) { if (!researchMode && hasResearchData(m)) toast(t('toast.researchHidden'), t('mode.research'), () => setResearchMode(true)); }
 const activeScenario = () => project.scenarios.find(s => s.id === project.activeId);
 function setModel(m) { model = m; activeScenario().model = m; }
 
@@ -62,7 +112,7 @@ function autosave() {
   try {
     localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      currentMeasure, showValues, snap, radius, conv, projector,
+      currentMeasure, showValues, snap, radius, conv, projector, layer, doorIsVisual, researchMode, tolCm, minContactCm,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -82,6 +132,11 @@ function loadSaved() {
       currentMeasure = o.currentMeasure || 'integ';
       showValues = !!o.showValues; snap = !!o.snap; radius = o.radius || 0; projector = !!o.projector;
       if (o.conv) conv = Object.assign(conv, o.conv);
+      if (LAYERS.includes(o.layer)) layer = o.layer;
+      researchMode = !!o.researchMode;
+      if (o.doorIsVisual === false) doorIsVisual = false;
+      if (o.tolCm > 0) tolCm = o.tolCm;
+      if (o.minContactCm > 0) minContactCm = o.minContactCm;
       if (o.bg) bg = Object.assign(bg, o.bg);
     }
     const pj = localStorage.getItem('ssx_project');
@@ -128,18 +183,20 @@ function labelInk(hsl) { const m = /hsl\((\d+)/.exec(hsl); if (!m) return C.ink;
 function recompute() {
   byId = new Map(model.nodes.map(n => [n.id, n]));
   const seen = new Set();
-  model.edges = model.edges.filter(([a, b]) => {
-    if (a === b || !byId.has(a) || !byId.has(b)) return false;
-    const k = a < b ? a + '\u0000' + b : b + '\u0000' + a;
+  model.edges = model.edges.filter(e => {
+    if (e.a === e.b || !byId.has(e.a) || !byId.has(e.b)) return false;
+    const k = edgeKey(e);
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   });
   if (!byId.has(model.root)) model.root = model.nodes.length ? model.nodes[0].id : null;
   [...selSet].forEach(id => { if (!byId.has(id)) selSet.delete(id); });
-  if (selEdge && !model.edges.some(e => sameEdge(e, selEdge[0], selEdge[1]))) selEdge = null;
+  if (selEdge && !findEdge(selEdge)) selEdge = null;
   if (linkFrom && !byId.has(linkFrom)) linkFrom = null;
   R = analyse(model);
+  if (review) refreshReview();
+  if (faceRev) refreshFaces();
   renderAll();
   autosave();
 }
@@ -167,10 +224,11 @@ function renderPanel() {
       <button class="danger" data-del="${esc(n.id)}" aria-label="${esc(t('btn.delete'))}">×</button>
     </div>`).join('');
   $('nCount').textContent = '(' + model.nodes.length + ')';
-  $('eCount').textContent = '(' + model.edges.length + ')';
-  $('edgeList').innerHTML = model.edges.map((e, i) => `
-    <div class="li${selEdge && sameEdge(e, selEdge[0], selEdge[1]) ? ' sel' : ''}">
-      <button class="nm" data-edge="${i}">${esc(e[0])} ↔ ${esc(e[1])}</button>
+  const shown = model.edges.map((e, i) => [e, i]).filter(([e]) => researchMode || inLayer(e));
+  $('eCount').textContent = '(' + shown.length + ')';
+  $('edgeList').innerHTML = shown.map(([e, i]) => `
+    <div class="li${selEdge === edgeKey(e) ? ' sel' : ''}">
+      <button class="nm" data-edge="${i}">${esc(e.a)} ↔ ${esc(e.b)}${edgeTag(e)}</button>
       <button class="danger" data-dele="${i}" aria-label="${esc(t('act.removeLink'))}">×</button>
     </div>`).join('');
   fillSel($('rootSel'), model.root); fillSel($('edgeA')); fillSel($('edgeB'));
@@ -182,9 +240,28 @@ function renderPanel() {
   ss.value = sortKey;
   $('optSnap').checked = snap; $('optValues').checked = showValues; $('optRadius').value = radius;
   $('optEntropy').value = conv.entropy; $('optHFactor').value = conv.differenceFactor;
+  $('optDoorVisual').checked = doorIsVisual;
+  const sc = model.geo && model.geo.escala_m_por_unidade;
+  $('scaleTxt').textContent = sc ? t('scale.value', { n: (1 / sc).toFixed(1) }) : t('scale.none');
+  $('optTol').value = tolCm; $('optMinContact').value = minContactCm;
+  const ext = model.nodes.find(x => x.exterior), north = northDeg();
+  $('extTxt').textContent = ext ? `${ext.id} · ${ext.name}` : t('ext.none');
+  $('btnExt').hidden = !!ext;
+  if (document.activeElement !== $('northNum')) $('northNum').value = Math.round(north);
+  $('northRange').value = Math.round(north);
+  renderExemplar();
+  document.querySelectorAll('select.layer-sel').forEach(sel => {
+    sel.innerHTML = LAYERS.map(l => `<option value="${l}">${esc(t('layer.' + l))}</option>`).join('');
+    sel.value = layer;
+  });
   const labs = new Set(t('label.presets').split('|'));
   project.scenarios.forEach(sc => sc.model.nodes.forEach(n => { if (n.label) labs.add(n.label); }));
   $('labelOptions').innerHTML = [...labs].map(l => `<option value="${esc(l)}"></option>`).join('');
+}
+/** Categoria e face, quando fogem do padrão (acesso, sem face). */
+function edgeTag(e) {
+  if (!researchMode || (e.kind === 'acesso' && !e.face)) return '';
+  return ` <span class="mini">${esc(t('kind.' + e.kind))}${e.face ? ' · ' + e.face : ''}</span>`;
 }
 function fillSel(sel, val) {
   const keep = sel.value;
@@ -261,15 +338,22 @@ function renderGraph() {
     const pg = Eo('polygon', { points: n.poly.map(p => p.join(',')).join(' '), fill: col, 'fill-opacity': 0.22, stroke: col, 'stroke-width': 1.4, 'stroke-opacity': 0.7 });
     svgG.appendChild(pg); polyEls[n.id] = pg;
   });
-  model.edges.forEach(([a, b]) => {
-    const pa = byId.get(a), pb = byId.get(b);
-    const sel = selEdge && sameEdge([a, b], selEdge[0], selEdge[1]);
-    const ln = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': 1.6, 'stroke-opacity': 0.55, class: 'edge' + (sel ? ' seledge' : '') });
+  model.edges.forEach(e => {
+    if (!researchMode && !inLayer(e)) return;
+    const pa = byId.get(e.a), pb = byId.get(e.b), key = edgeKey(e), sel = selEdge === key;
+    // Simples: o traço de sempre. Pesquisa: traço da categoria; fora da camada analisada fica claro.
+    const lines = researchMode
+      ? kindLines(e.kind, pa.x, pa.y, pb.x, pb.y, inLayer(e) ? 0.85 : 0.3, sel ? 'seledge' : '')
+      : [Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': 1.6, 'stroke-opacity': 0.55, class: 'edge' + (sel ? ' seledge' : '') })];
     const hit = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: 'transparent', 'stroke-width': 12, class: 'edgehit' });
-    hit.dataset.a = a; hit.dataset.b = b;
-    svgG.appendChild(ln); svgG.appendChild(hit);
-    edgeEls.push({ a, b, ln, hit });
+    hit.dataset.key = key;
+    lines.forEach(l => svgG.appendChild(l)); svgG.appendChild(hit);
+    edgeEls.push({ a: e.a, b: e.b, ln: lines[0], extra: lines.slice(1), hit });
   });
+  renderKindLegend();
+  if (review) drawReviewOverlay();
+  if (faceRev) drawFacesOverlay();
+  renderCompass();
   const m = meta(currentMeasure);
   model.nodes.forEach(n => {
     const p = R.per[n.id], col = colourOf(n.id), rad = nodeRadius(n.id);
@@ -290,7 +374,7 @@ function renderGraph() {
     if (showValues) g.appendChild(txt(0, -rad - 6, FMT[m.key](valOf(n.id, m.key)), 10, C.accent, '700', 't-val'));
     svgG.appendChild(g); nodeEls[n.id] = g;
   });
-  if (mode === 'poly' && poly.pts.length) drawPolyPreview();
+  if ((mode === 'poly' || mode === 'measure') && (poly.pts.length || poly.cursor)) drawPolyPreview();
   const [mn, mx] = measureRange(currentMeasure), f = FMT[m.key];
   $('legLo').textContent = t('legend.seg') + ' · ' + f(m.invert ? mx : mn);
   $('legHi').textContent = f(m.invert ? mn : mx) + ' · ' + t('legend.int');
@@ -302,7 +386,7 @@ function updatePositions() {
   });
   edgeEls.forEach(ed => {
     const a = byId.get(ed.a), b = byId.get(ed.b);
-    for (const el of [ed.ln, ed.hit]) { el.setAttribute('x1', a.x); el.setAttribute('y1', a.y); el.setAttribute('x2', b.x); el.setAttribute('y2', b.y); }
+    for (const el of [ed.ln, ...(ed.extra || []), ed.hit]) { el.setAttribute('x1', a.x); el.setAttribute('y1', a.y); el.setAttribute('x2', b.x); el.setAttribute('y2', b.y); }
   });
 }
 function clearGuides() { guides.forEach(g => g.remove()); guides = []; }
@@ -361,7 +445,7 @@ svgG.addEventListener('pointerdown', e => {
   if (e.button === 1 || e.altKey) { gesture = { ...g, type: 'pan' }; return; }
   if (mode === 'select') {
     if (id) { startNodeDrag(g, id, e.shiftKey); return; }
-    if (edgeEl) { gesture = { ...g, type: 'edge', a: edgeEl.dataset.a, b: edgeEl.dataset.b }; return; }
+    if (edgeEl) { gesture = { ...g, type: 'edge', key: edgeEl.dataset.key }; return; }
     if (!g.touch) {
       boxEl = Eo('rect', { x: pt.x, y: pt.y, width: 0, height: 0, fill: 'rgba(178,58,46,.08)', stroke: C.accent, 'stroke-width': 0.8, 'stroke-dasharray': '4 3' });
       svgG.appendChild(boxEl);
@@ -373,7 +457,7 @@ svgG.addEventListener('pointerdown', e => {
   }
   if (mode === 'link') { gesture = { ...g, type: id ? 'linkNode' : 'panTap', id }; return; }
   if (mode === 'add') { gesture = { ...g, type: id ? 'nodeTap' : 'addTap', id }; return; }
-  if (mode === 'poly') { gesture = { ...g, type: 'polyTap' }; }
+  if (mode === 'poly' || mode === 'measure') { gesture = { ...g, type: 'polyPlace' }; previewSnap(pt); }
 });
 
 function startNodeDrag(g, id, shift) {
@@ -410,6 +494,7 @@ svgG.addEventListener('pointermove', e => {
   }
   const thr = gesture.touch ? 8 : 3;
   if (!gesture.moved && Math.hypot(e.clientX - gesture.x0, e.clientY - gesture.y0) > thr) { gesture.moved = true; clearTimeout(gesture.lp); }
+  if (gesture.type === 'polyPlace') { previewSnap(pt); return; }
   if (!gesture.moved) return;
   if (gesture.type === 'drag') dragTo(pt);
   else if (gesture.type === 'box') updateBox(pt);
@@ -434,9 +519,15 @@ function endPointer(e, cancelled) {
     } else openSheet({ kind: 'node', id: g.id });
     return;
   }
+  if (g.type === 'polyPlace') {
+    if (cancelled) { poly.snap = null; poly.cursor = null; drawPolyPreview(); return; }
+    polyAddPoint(poly.snap || polySnap(clientToWorld(e.clientX, e.clientY)));
+    if (g.touch) { poly.cursor = null; poly.snap = null; drawPolyPreview(); }
+    return;
+  }
   if (cancelled || g.moved) return;
   switch (g.type) {
-    case 'edge': selectEdge(g.a, g.b); break;
+    case 'edge': selectEdge(g.key); break;
     case 'panTap':
       if (mode === 'link') cancelLink();
       else if (mode === 'select' && !multi) clearSelection();
@@ -444,7 +535,6 @@ function endPointer(e, cancelled) {
     case 'addTap': addNodeAt(g.pt.x, g.pt.y); break;
     case 'nodeTap': selSet.clear(); selSet.add(g.id); refreshSel(); openSheet({ kind: 'node', id: g.id }); break;
     case 'linkNode': linkClick(g.id); break;
-    case 'polyTap': polyAddPoint(g.pt, g.x0, g.y0); break;
   }
 }
 svgG.addEventListener('pointerup', e => endPointer(e, false));
@@ -490,7 +580,7 @@ function hoverPreview(pt) {
     if (!pendingLine) { pendingLine = Eo('line', { stroke: C.accent, 'stroke-width': 1.4, 'stroke-dasharray': '4 3', 'pointer-events': 'none' }); svgG.appendChild(pendingLine); }
     pendingLine.setAttribute('x1', a.x); pendingLine.setAttribute('y1', a.y); pendingLine.setAttribute('x2', pt.x); pendingLine.setAttribute('y2', pt.y);
   }
-  if (mode === 'poly' && poly.pts.length) { poly.cursor = [pt.x, pt.y]; drawPolyPreview(); }
+  if (mode === 'poly' || mode === 'measure') previewSnap(pt);
 }
 
 /* ---------------- EDIÇÃO ---------------- */
@@ -507,11 +597,28 @@ function addNodeAt(x, y, name) {
 }
 function addEdge(a, b) {
   if (!a || !b || a === b) return;
-  if (model.edges.some(e => sameEdge(e, a, b))) { toast(t('toast.linkExists')); return; }
-  mutate(() => model.edges.push([a, b]));
+  const existing = model.edges.find(e => edgeKey(e) === edgeKey({ a, b }));
+  if (existing) { toast(!researchMode && !inLayer(existing) ? t('toast.linkHidden', { kind: t('kind.' + existing.kind) }) : t('toast.linkExists')); return; }
+  mutate(() => model.edges.push({ a, b, kind: researchMode ? linkKind : 'acesso' }));
 }
-function removeEdge(a, b) {
-  mutate(() => { model.edges = model.edges.filter(e => !sameEdge(e, a, b)); });
+/** Muda a categoria da ligação (modo Pesquisa). */
+function setEdgeKind(key, kind) {
+  const e = findEdge(key);
+  if (!e || e.kind === kind || !EDGE_KINDS.includes(kind)) return;
+  mutate(() => { e.kind = kind; });
+}
+/** Muda a face de uma ligação com o exterior; respeita "uma por par e por face". */
+function setEdgeFace(key, face) {
+  const e = findEdge(key);
+  if (!e) return;
+  const next = face ? { ...e, face } : { a: e.a, b: e.b, kind: e.kind };
+  const nk = edgeKey(next);
+  if (nk !== key && findEdge(nk)) { toast(t('toast.faceTaken', { face })); renderSheet(); return; }
+  mutate(() => { if (face) e.face = face; else delete e.face; });
+  selEdge = nk; sheetFor = { kind: 'edge', key: nk }; renderGraph(); renderSheet();
+}
+function removeEdge(key) {
+  mutate(() => { model.edges = model.edges.filter(e => edgeKey(e) !== key); });
   selEdge = null; closeSheet();
   toast(t('toast.linkRemoved'), t('toast.undo'), undo);
 }
@@ -523,8 +630,8 @@ function deleteNodes(ids) {
   toast(t('toast.deleted', { n: set.size }), t('toast.undo'), undo);
 }
 function setRoot(id) { mutate(() => { model.root = id; }); }
-function clearSelection() { selSet.clear(); selEdge = null; multi = false; closeSheet(); renderGraph(); refreshSel(); }
-function selectEdge(a, b) { selSet.clear(); multi = false; selEdge = [a, b]; renderGraph(); refreshSel(); openSheet({ kind: 'edge', a, b }); }
+function clearSelection() { selSet.clear(); selEdge = null; multi = false; if (!review && !faceRev) closeSheet(); renderGraph(); refreshSel(); }
+function selectEdge(key) { selSet.clear(); multi = false; selEdge = key; renderGraph(); refreshSel(); openSheet({ kind: 'edge', key }); }
 
 function linkClick(id) {
   if (!linkFrom) { linkFrom = id; refreshSel(); return; }
@@ -537,22 +644,57 @@ function linkClick(id) {
 function cancelLink() { linkFrom = null; if (pendingLine) { pendingLine.remove(); pendingLine = null; } refreshSel(); }
 
 /* polígonos convexos */
-function polyAddPoint(pt, cx, cy) {
+/** Ímã: gruda em vértices e lados dos polígonos existentes; senão, grade (se ligada) ou ponto livre. */
+function polySnap(pt) {
+  const r = (lastPointerType === 'mouse' ? 10 : 18) / pxPerUnit();
+  const targets = model.nodes.filter(n => n.poly && n.poly.length >= 3).map(n => ({ owner: n.id, poly: n.poly }));
+  const res = snapPoint([pt.x, pt.y], targets, r);
+  if (res.kind === 'none') res.p = [snapV(pt.x), snapV(pt.y)];
+  return res;
+}
+function previewSnap(pt) { poly.snap = polySnap(pt); poly.cursor = poly.snap.p; drawPolyPreview(); }
+function polyAddPoint(res) {
+  const p = res.p;
+  if (mode === 'measure') {
+    if (poly.pts.length >= 2) return;
+    poly.pts.push([p[0], p[1]]);
+    drawPolyPreview(); renderCtx();
+    if (poly.pts.length === 2) setTimeout(() => { const i = $('calibM'); if (i) i.focus(); }, 0);
+    return;
+  }
   if (poly.pts.length >= 3) {
     const f = poly.pts[0], ctm = svgG.getScreenCTM();
-    const sx = f[0] * ctm.a + ctm.e, sy = f[1] * ctm.d + ctm.f;
-    if (Math.hypot(sx - cx, sy - cy) < 22) { finishPoly(); return; }
+    const dx = (f[0] - p[0]) * ctm.a, dy = (f[1] - p[1]) * ctm.d;
+    if (Math.hypot(dx, dy) < 22) { finishPoly(); return; }
   }
-  poly.pts.push([snapV(pt.x), snapV(pt.y)]);
+  // 1º ponto sobre o lado de um vizinho: oferece usar a parede inteira
+  poly.wall = !poly.pts.length && res.kind === 'edge' ? res.seg : null;
+  poly.pts.push([p[0], p[1]]);
+  drawPolyPreview(); renderCtx();
+}
+/** Parede compartilhada: troca o 1º ponto pelos dois vértices do lado vizinho (na ordem inversa). */
+function useSharedWall() {
+  if (!poly.wall || poly.pts.length !== 1) return;
+  poly.pts = sharedWall(poly.wall);
+  poly.wall = null;
   drawPolyPreview(); renderCtx();
 }
 function drawPolyPreview() {
   if (polyPreview) polyPreview.remove();
   polyPreview = null;
-  if (!poly.pts.length) return;
+  if ((mode !== 'poly' && mode !== 'measure') || (!poly.pts.length && !poly.cursor)) return;
   const k = pxPerUnit(), g = Eo('g', { 'pointer-events': 'none' });
   const pts = poly.cursor ? [...poly.pts, poly.cursor] : poly.pts;
-  g.appendChild(Eo('polyline', { points: pts.map(p => p.join(',')).join(' '), fill: 'rgba(178,58,46,.08)', stroke: C.accent, 'stroke-width': 1.6 / k * 1.2 }));
+  // indicador do ímã: círculo = vértice; losango + lado destacado = parede
+  const s = poly.snap, blue = '#2f5d8a';
+  if (s && s.kind === 'edge') {
+    g.appendChild(Eo('line', { x1: s.seg[0][0], y1: s.seg[0][1], x2: s.seg[1][0], y2: s.seg[1][1], stroke: blue, 'stroke-width': 4 / k, 'stroke-opacity': 0.45 }));
+    const d = 7 / k;
+    g.appendChild(Eo('polygon', { points: `${s.p[0]},${s.p[1] - d} ${s.p[0] + d},${s.p[1]} ${s.p[0]},${s.p[1] + d} ${s.p[0] - d},${s.p[1]}`, fill: '#fff', stroke: blue, 'stroke-width': 2 / k }));
+  } else if (s && s.kind === 'vertex') {
+    g.appendChild(Eo('circle', { cx: s.p[0], cy: s.p[1], r: 8 / k, fill: 'none', stroke: blue, 'stroke-width': 2.2 / k }));
+  }
+  if (pts.length > 1) g.appendChild(Eo('polyline', { points: pts.map(p => p.join(',')).join(' '), fill: 'rgba(178,58,46,.08)', stroke: C.accent, 'stroke-width': 1.6 / k * 1.2 }));
   poly.pts.forEach((p, i) => g.appendChild(Eo('circle', { cx: p[0], cy: p[1], r: (i === 0 && poly.pts.length >= 3 ? 9 : 4.5) / k, fill: i === 0 ? C.accent : '#fff', stroke: C.accent, 'stroke-width': 1.5 / k })));
   svgG.appendChild(g); polyPreview = g;
 }
@@ -575,54 +717,36 @@ function finishPoly() {
   const pts = poly.pts.slice();
   const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length, cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
   const id = nextId();
-  poly.pts = []; poly.cursor = null;
+  poly.pts = []; poly.cursor = null; poly.snap = null; poly.wall = null;
   mutate(() => model.nodes.push({ id, name: t('newSpace', { n: model.nodes.length + 1 }), x: Math.round(cx), y: Math.round(cy), poly: pts }));
   if (!isConvex(pts)) toast(t('toast.nonconvex'));
 }
-function cancelPoly() { poly.pts = []; poly.cursor = null; drawPolyPreview(); renderCtx(); }
+function cancelPoly() { poly.pts = []; poly.cursor = null; poly.snap = null; poly.wall = null; drawPolyPreview(); renderCtx(); }
 
-function segOverlap(a1, a2, b1, b2, tol) {
-  const dax = a2[0] - a1[0], day = a2[1] - a1[1], len = Math.hypot(dax, day);
-  if (len < 1e-6) return 0;
-  const ux = dax / len, uy = day / len;
-  const perp = p => Math.abs((p[0] - a1[0]) * -uy + (p[1] - a1[1]) * ux);
-  if (perp(b1) > tol || perp(b2) > tol) return 0;
-  const proj = p => (p[0] - a1[0]) * ux + (p[1] - a1[1]) * uy;
-  let s0 = proj(b1), s1 = proj(b2);
-  if (s0 > s1) [s0, s1] = [s1, s0];
-  return Math.max(0, Math.min(len, s1) - Math.max(0, s0));
-}
-function polysShareEdge(pa, pb, tol) {
-  for (let i = 0; i < pa.length; i++) for (let j = 0; j < pb.length; j++) {
-    if (segOverlap(pa[i], pa[(i + 1) % pa.length], pb[j], pb[(j + 1) % pb.length], tol) > tol) return true;
-  }
-  return false;
-}
-function deriveAdjacency() {
-  const ps = model.nodes.filter(n => n.poly && n.poly.length >= 3);
-  if (ps.length < 2) { toast(t('toast.needPolys')); return; }
-  const found = [];
-  for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
-    const A = ps[i], B = ps[j];
-    if (polysShareEdge(A.poly, B.poly, 8) && !model.edges.some(e => sameEdge(e, A.id, B.id))) found.push([A.id, B.id]);
-  }
-  if (found.length) mutate(() => model.edges.push(...found));
-  toast(found.length ? t('toast.derived', { n: found.length }) : t('toast.noDerived'));
-}
 
 /* ---------------- MODO E BARRA DE CONTEXTO ---------------- */
 function setMode(m) {
-  mode = m; linkFrom = null; poly.pts = []; poly.cursor = null; multi = false;
+  mode = m; linkFrom = null; poly.pts = []; poly.cursor = null; poly.snap = null; poly.wall = null; multi = false;
   document.querySelectorAll('.modebtn').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   renderGraph(); renderCtx();
 }
 function renderCtx() {
   let html = '';
   if (mode === 'add') html = `<span>${t('ctx.add')}</span>`;
-  else if (mode === 'link') html = `<span>${linkFrom ? t('ctx.link2', { id: esc(linkFrom) }) : t('ctx.link1')}</span>` + (linkFrom ? `<button data-ctx="cancelLink">${t('btn.cancel')}</button>` : '');
+  else if (mode === 'link') html = `<span>${linkFrom ? t('ctx.link2', { id: esc(linkFrom) }) : t('ctx.link1')}</span>` +
+    (researchMode ? `<div class="kindpick inbar" role="radiogroup" aria-label="${esc(t('edge.kind'))}">${EDGE_KINDS.map(k => `<button data-ctx="linkKind" data-k="${k}" role="radio" aria-checked="${k === linkKind}" title="${esc(t('kind.' + k))}">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}</div>` : '') +
+    (linkFrom ? `<button data-ctx="cancelLink">${t('btn.cancel')}</button>` : '');
+  else if (mode === 'measure') {
+    const n = poly.pts.length;
+    html = n < 2
+      ? `<span>${t('ctx.measure', { n: n + 1 })}</span><button data-ctx="cancelMeasure">${t('btn.cancel')}</button>`
+      : `<span>${t('ctx.measureDist')}</span><input type="number" id="calibM" class="calib" min="0.01" step="0.01" inputmode="decimal" placeholder="0,00"><span>m</span><button class="primary" data-ctx="calibOk">OK</button><button data-ctx="cancelMeasure">${t('btn.cancel')}</button>`;
+  }
   else if (mode === 'poly') {
     const n = poly.pts.length;
-    html = `<span>${t('ctx.poly')}</span><button data-ctx="undoPt" ${n ? '' : 'disabled'}>${t('btn.undoPt')}</button>` +
+    html = `<span>${t('ctx.poly')}</span>` +
+      (poly.wall && n === 1 ? `<button class="primary" data-ctx="useWall">${t('btn.useWall')}</button>` : '') +
+      `<button data-ctx="undoPt" ${n ? '' : 'disabled'}>${t('btn.undoPt')}</button>` +
       `<button class="primary" data-ctx="closePoly" ${n >= 3 ? '' : 'disabled'}>${t('btn.close')}</button>` +
       (n ? `<button data-ctx="cancelPoly">${t('btn.cancel')}</button>` : '');
   } else if (multi || selSet.size > 1) {
@@ -641,9 +765,13 @@ $('ctxBar').addEventListener('click', e => {
   if (!b) return;
   switch (b.dataset.ctx) {
     case 'cancelLink': cancelLink(); break;
-    case 'undoPt': poly.pts.pop(); drawPolyPreview(); renderCtx(); break;
+    case 'linkKind': linkKind = b.dataset.k; renderCtx(); break;
+    case 'undoPt': poly.pts.pop(); poly.wall = null; drawPolyPreview(); renderCtx(); break;
     case 'closePoly': finishPoly(); break;
     case 'cancelPoly': cancelPoly(); break;
+    case 'useWall': useSharedWall(); break;
+    case 'calibOk': applyCalibration(); break;
+    case 'cancelMeasure': setMode('select'); break;
     case 'linkPair': { const [a, c] = [...selSet]; addEdge(a, c); break; }
     case 'delSel': armConfirm(b, () => deleteNodes([...selSet])); break;
     case 'doneSel': clearSelection(); break;
@@ -660,6 +788,7 @@ function sheetRows() {
   return [...new Set([...first, 'integ', 'choice', 'depth', 'conn'])].slice(0, 4);
 }
 function openSheet(target) {
+  if ((review || faceRev) && target.kind !== 'review' && target.kind !== 'faces') return; // durante uma revisão, tocar no mapa não troca o painel
   sheetFor = target;
   if (target.kind === 'node' && !selSet.has(target.id)) { selSet.clear(); selSet.add(target.id); refreshSel(); }
   renderSheet();
@@ -674,18 +803,354 @@ function keepAboveSheet(id) {
   if (bottom - top < 40 || (sy >= top && sy <= bottom)) return;
   panBy(0, (top + bottom) / 2 - sy);
 }
-function closeSheet() { if (!sheetFor) return; sheetFor = null; renderSheet(); if (selEdge) { selEdge = null; renderGraph(); } }
+function closeSheet() {
+  if (!sheetFor) return;
+  const wasReview = sheetFor.kind === 'review' || sheetFor.kind === 'faces';
+  sheetFor = null;
+  if (wasReview) { review = null; faceRev = null; }
+  renderSheet();
+  if (selEdge || wasReview) { selEdge = null; renderGraph(); }
+}
+/** Editor da ligação no modo Pesquisa: categoria (4 botões) e, com o exterior, a face. */
+function edgeEditor(e) {
+  const ext = model.nodes.find(n => n.exterior);
+  const touchesExt = ext && (e.a === ext.id || e.b === ext.id);
+  return `<div class="kindpick" role="radiogroup" aria-label="${esc(t('edge.kind'))}">
+      ${EDGE_KINDS.map((k, i) => `<button data-act="setKind" data-k="${k}" role="radio" aria-checked="${e.kind === k}" title="${esc(t('kind.' + k))} (${i + 1})">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}
+    </div>
+    <button class="linkish" data-info="layer">${esc(t('edge.kindHelp'))} ⓘ</button>
+    ${touchesExt ? `<label class="labelrow"><span>${esc(t('edge.face'))}</span><select id="edgeFace">
+      <option value="">—</option>${FACES.map(f => `<option value="${f}" ${e.face === f ? 'selected' : ''}>${f} · ${esc(t('face.' + f))}</option>`).join('')}
+    </select></label>` : ''}`;
+}
+/* ---------------- VIZINHANÇA: ESCALA, DETECÇÃO E REVISÃO (F4.3.3) ---------------- */
+/** Tolerâncias em unidades do desenho; sem escala, valores provisórios em unidades. */
+function adjUnits() {
+  const s = model.geo && model.geo.escala_m_por_unidade;
+  return s ? { tol: tolCm / 100 / s, min: minContactCm / 100 / s, scaled: true, s } : { tol: 8, min: 20, scaled: false, s: 0 };
+}
+const fmtLen = v => { const u = adjUnits(); return u.scaled ? `${Math.round(v * u.s * 100)} cm` : `${v.toFixed(1)} u`; };
+const pairKey = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
+const polyList = () => model.nodes.filter(n => n.poly && n.poly.length >= 3).map(n => ({ id: n.id, poly: n.poly }));
+/** Pares que já têm ligação (no modo Simples, só as de passagem contam). */
+const linkedPairs = () => new Set(model.edges.filter(e => researchMode || inLayer(e)).map(e => pairKey(e.a, e.b)));
+function detectNew() {
+  const u = adjUnits(), linked = linkedPairs();
+  const all = detectAdjacency(polyList(), { tol: u.tol, minContact: u.min });
+  return { cands: all.filter(c => !linked.has(pairKey(c.a, c.b))), linked: all.length - all.filter(c => !linked.has(pairKey(c.a, c.b))).length };
+}
+function openReview() {
+  if (polyList().length < 2) { toast(t('toast.needPolys')); return; }
+  if (mode !== 'select') setMode('select');
+  setView('graph');
+  review = null; faceRev = null; closeSheet();
+  const { cands, linked } = detectNew();
+  // pré-seleciona certas e prováveis; duvidosas só com confirmação
+  review = { cands, linked, sel: new Set(cands.filter(c => c.confidence !== 'duvidosa').map(c => pairKey(c.a, c.b))), focus: null };
+  sheetFor = { kind: 'review' }; renderSheet(); renderGraph();
+}
+function refreshReview() {
+  const keep = review.sel, { cands, linked } = detectNew();
+  review.cands = cands; review.linked = linked;
+  review.sel = new Set(cands.map(c => pairKey(c.a, c.b)).filter(k => keep.has(k)));
+}
+function reviewHTML(closeBtn) {
+  const u = adjUnits(), n = review.sel.size, kindNew = t('kind.' + (researchMode ? 'opaco' : 'acesso'));
+  const name = id => esc((byId.get(id) || { name: id }).name);
+  let h = `<div class="sheet-handle"></div><div class="sheet-head"><h3>${esc(t('rev.title'))}</h3>${closeBtn}</div>
+    <p class="hint">${esc(u.scaled ? t('rev.scaleInfo', { tol: tolCm, min: minContactCm }) : t('rev.noScale'))}${review.linked ? ' ' + esc(t('rev.linked', { n: review.linked })) : ''}</p>`;
+  if (!review.cands.length) h += `<p>${esc(t('rev.none'))}</p>`;
+  for (const conf of ['certa', 'provavel', 'duvidosa']) {
+    const list = review.cands.filter(c => c.confidence === conf);
+    if (!list.length) continue;
+    h += `<h4 class="revh conf-${conf}">${esc(t('rev.' + conf))} (${list.length})</h4>` + list.map(c => {
+      const k = pairKey(c.a, c.b);
+      return `<div class="revrow conf-${conf}${review.focus === k ? ' focus' : ''}">
+        <input type="checkbox" data-rev="${esc(k)}" ${review.sel.has(k) ? 'checked' : ''} aria-label="${esc(c.a)} ↔ ${esc(c.b)}">
+        <button class="linkish revname" data-revfocus="${esc(k)}"><b>${esc(c.a)} ↔ ${esc(c.b)}</b> <small>${name(c.a)} ↔ ${name(c.b)}</small></button>
+        <span class="mini">${esc(t('rev.contact'))} ${fmtLen(c.contact)} · ${esc(t('rev.gap'))} ${fmtLen(c.gap)}</span>
+        <span class="tag">${esc(t('rev.r.' + c.reason))}</span>
+      </div>`;
+    }).join('');
+  }
+  h += `<div class="sheet-actions">
+      <button class="ghost" data-act="revWeld" ${n ? '' : 'disabled'}>${esc(t('rev.weld', { n }))}</button>
+      <button data-act="revCreate" ${n ? '' : 'disabled'}>${esc(t('rev.create', { n, kind: kindNew }))}</button>
+    </div>`;
+  return h;
+}
+/** Contatos coloridos no mapa: verde contínuo = certa, âmbar tracejado = provável, vermelho pontilhado = duvidosa. */
+function drawReviewOverlay() {
+  const k = pxPerUnit(), STY = { certa: ['#2b7a4b', null], provavel: ['#c98a1a', [8, 5]], duvidosa: ['#b23a2e', [2, 5]] };
+  review.cands.forEach(c => {
+    const key = pairKey(c.a, c.b), on = review.sel.has(key), [col, dash] = STY[c.confidence];
+    c.segs.forEach(([p, q]) => {
+      const a = { x1: p[0], y1: p[1], x2: q[0], y2: q[1], stroke: col, 'stroke-width': (review.focus === key ? 11 : 6) / k, 'stroke-opacity': on ? 0.85 : 0.3, 'stroke-linecap': 'round', 'pointer-events': 'none' };
+      if (dash) a['stroke-dasharray'] = dash.map(d => d / k).join(' ');
+      svgG.appendChild(Eo('line', a));
+    });
+  });
+}
+function focusPair(key) {
+  const c = review && review.cands.find(x => pairKey(x.a, x.b) === key);
+  if (!c) return;
+  review.focus = key;
+  const [p, q] = c.segs[0] || [[byId.get(c.a).x, byId.get(c.a).y], [byId.get(c.b).x, byId.get(c.b).y]];
+  const r = svgG.getBoundingClientRect();
+  placeCam((p[0] + q[0]) / 2, (p[1] + q[1]) / 2, r.left + r.width / 2, r.top + r.height * 0.35, cam.w);
+  renderGraph(); renderSheet();
+}
+/** Fechar frestas dos pares marcados: solda vértices próximos e encosta vértices nas paredes vizinhas. */
+function reviewWeld() {
+  const ids = new Set();
+  review.sel.forEach(k => k.split('\u0000').forEach(i => ids.add(i)));
+  const { polys, moved } = closeGaps(polyList(), ids, adjUnits().tol);
+  if (!moved) { toast(t('rev.nothingToWeld')); return; }
+  const np = new Map(polys.map(p => [p.id, p.poly]));
+  mutate(() => model.nodes.forEach(n => { if (ids.has(n.id) && np.has(n.id)) n.poly = np.get(n.id); }));
+  const bad = [...ids].filter(id => { const n = byId.get(id); return n && n.poly && !isConvex(n.poly); });
+  toast(t('rev.welded', { n: moved }) + (bad.length ? ' ' + t('rev.nonconvex', { ids: bad.join(', ') }) : ''), t('toast.undo'), undo);
+}
+/** Cria as ligações dos pares marcados: opaco no modo Pesquisa (para reclassificar), acesso no Simples. */
+function reviewCreate() {
+  const kind = researchMode ? 'opaco' : 'acesso';
+  const add = review.cands.filter(c => review.sel.has(pairKey(c.a, c.b))).map(c => ({ a: c.a, b: c.b, kind }));
+  review = null; sheetFor = null;
+  mutate(() => model.edges.push(...add));
+  toast(t('rev.created', { n: add.length, kind: t('kind.' + kind) }) + (researchMode ? t('rev.createdResearch') : ''), t('toast.undo'), undo);
+}
+/** Calibração: distância real (m) entre os dois pontos medidos → metros por unidade do desenho. */
+function applyCalibration() {
+  const inp = $('calibM'), m = inp ? parseFloat(String(inp.value).replace(',', '.')) : NaN;
+  if (!(m > 0) || poly.pts.length < 2) { toast(t('toast.calibBad')); return; }
+  const [p, q] = poly.pts, units = Math.hypot(q[0] - p[0], q[1] - p[1]);
+  if (units < 1e-6) { toast(t('toast.calibBad')); return; }
+  const s = m / units;
+  setMode('select');
+  mutate(() => { model.geo = { ...(model.geo || {}), escala_m_por_unidade: s }; });
+  toast(t('toast.calibrated', { n: (1 / s).toFixed(1) }));
+}
+$('sheet').addEventListener('click', e => {
+  const f = e.target.closest('[data-revfocus]'); if (f) focusPair(f.dataset.revfocus);
+  const g = e.target.closest('[data-facefocus]'); if (g) focusFaceSpace(g.dataset.facefocus);
+});
+
+/* ---------------- EXTERIOR, NORTE E FACES (F4.3.4) ---------------- */
+const northDeg = () => (model.geo && Number.isFinite(model.geo.norte_graus) ? model.geo.norte_graus : 0);
+const extNode = () => model.nodes.find(n => n.exterior);
+const FACE_STY = { N: ['#2f5d8a', null], L: ['#2b7a4b', [6, 3]], S: ['#c98a1a', [2, 4]], O: ['#7a3fa0', [10, 3, 2, 3]] };
+function setNorth(deg) {
+  const d = ((Math.round(deg) % 360) + 360) % 360;
+  if (d === northDeg() && model.geo && model.geo.norte_graus !== undefined) return;
+  mutate(() => { model.geo = { ...(model.geo || {}), norte_graus: d }; });
+}
+/** Seta do norte no canto do mapa (modo Pesquisa). */
+function renderCompass(preview) {
+  const g = $('compassRot');
+  if (g) g.setAttribute('transform', `rotate(${preview ?? northDeg()})`);
+}
+/** Ao tirar a marca de exterior de um espaço, as faces das suas ligações deixam de valer (schema v3). */
+function stripFaces(id) {
+  let n = 0;
+  model.edges.forEach(e => { if ((e.a === id || e.b === id) && e.face) { delete e.face; n++; } });
+  return n;
+}
+function toggleExterior(id) {
+  const n = byId.get(id);
+  if (!n) return;
+  let cleared = 0;
+  if (n.exterior) {
+    mutate(() => { delete n.exterior; cleared = stripFaces(id); });
+    toast(t('toast.extUnset', { id }) + (cleared ? ' ' + t('toast.extFacesCleared', { n: cleared }) : ''), t('toast.undo'), undo);
+    return;
+  }
+  const prev = extNode();
+  mutate(() => { if (prev) { delete prev.exterior; cleared = stripFaces(prev.id); } n.exterior = true; });
+  toast((prev ? t('toast.extMoved', { a: prev.id, b: id }) : t('toast.extSet', { id })) + (cleared ? ' ' + t('toast.extFacesCleared', { n: cleared }) : ''), t('toast.undo'), undo);
+}
+/** Cria o nó exterior (portador) acima do desenho e o define como raiz. */
+function createExterior() {
+  const ex = extNode();
+  if (ex) { toast(t('toast.extExists', { id: ex.id })); return; }
+  const b = contentBounds(ASPECT, 0, model, false, 0), used = new Set(model.nodes.map(n => n.id));
+  const id = used.has('ext') ? nextId() : 'ext';
+  mutate(() => {
+    model.nodes.push({ id, name: t('scn.exterior'), x: Math.round(b.x + b.w / 2), y: Math.round(b.y - 30), label: t('scn.exterior'), exterior: true });
+    model.root = id;
+  });
+  toast(t('toast.extCreated'), t('toast.undo'), undo);
+}
+function computeFaces() {
+  const ext = extNode(), u = adjUnits();
+  const polys = polyList().filter(p => p.id !== ext.id);
+  const sugg = suggestFaces(exteriorPieces(polys, northDeg(), u.tol, u.min));
+  const other = e => (e.a === ext.id ? e.b : e.a);
+  const extEdges = model.edges.filter(e => e.a === ext.id || e.b === ext.id);
+  const items = sugg.map(s => {
+    const ex = extEdges.find(e => other(e) === s.id && e.face === s.face);
+    return { ...s, exists: !!ex, existsKind: ex ? ex.kind : null, faceless: extEdges.some(e => other(e) === s.id && !e.face) };
+  });
+  const sk = new Set(sugg.map(s => s.id + '|' + s.face));
+  // faces já gravadas que a geometria não confirma (para conferir)
+  const extra = extEdges.filter(e => e.face && !sk.has(other(e) + '|' + e.face)).map(e => `${other(e)} · ${e.face} (${t('kind.' + e.kind)})`);
+  return { items, extra };
+}
+function openFaceReview() {
+  if (!extNode()) { toast(t('toast.needExt'), t('btn.createExt'), createExterior); return; }
+  if (!polyList().length) { toast(t('toast.needPolys')); return; }
+  if (mode !== 'select') setMode('select');
+  setView('graph');
+  review = null; faceRev = null; closeSheet();
+  const { items, extra } = computeFaces();
+  faceRev = { items, extra, sel: new Set(items.filter(i => !i.exists).map(i => i.id + '|' + i.face)), focus: null };
+  sheetFor = { kind: 'faces' }; renderSheet(); renderGraph();
+}
+function refreshFaces() {
+  if (!extNode()) { faceRev = null; if (sheetFor && sheetFor.kind === 'faces') sheetFor = null; return; }
+  const keep = faceRev.sel, { items, extra } = computeFaces();
+  faceRev.items = items; faceRev.extra = extra;
+  faceRev.sel = new Set(items.filter(i => !i.exists).map(i => i.id + '|' + i.face).filter(k => keep.has(k)));
+}
+function facesHTML(closeBtn) {
+  const geoN = model.geo && model.geo.norte_graus !== undefined;
+  const ids = [...new Set(faceRev.items.map(i => i.id))];
+  const n = faceRev.sel.size;
+  let h = `<div class="sheet-handle"></div><div class="sheet-head"><h3>${esc(t('faces.title'))}</h3>${closeBtn}</div>
+    <p class="hint">${esc(geoN ? t('faces.info', { deg: Math.round(northDeg()) }) : t('faces.noNorth'))} <button class="linkish" data-info="orientation">ⓘ</button></p>`;
+  if (!ids.length) h += `<p>${esc(t('faces.none'))}</p>`;
+  h += ids.map(id => {
+    const items = faceRev.items.filter(i => i.id === id), nd = byId.get(id);
+    const chips = items.map(i => {
+      const k = i.id + '|' + i.face;
+      if (i.exists) return `<span class="facechip done f-${i.face}"><b>${i.face}</b><small>${esc(t('faces.exists', { kind: t('kind.' + i.existsKind) }))}</small></span>`;
+      return `<label class="facechip f-${i.face}"><input type="checkbox" data-facesel="${esc(k)}" ${faceRev.sel.has(k) ? 'checked' : ''}><b>${i.face}</b><small>${fmtLen(i.length)}</small></label>`;
+    }).join('');
+    const firstSel = items.find(i => !i.exists && faceRev.sel.has(i.id + '|' + i.face));
+    const note = items[0].faceless && firstSel ? `<p class="hint" style="margin:.2rem 0 0">${esc(t('faces.assign', { face: firstSel.face }))}</p>` : '';
+    return `<div class="facegroup${faceRev.focus === id ? ' focus' : ''}"><button class="linkish revname" data-facefocus="${esc(id)}"><b>${esc(id)}</b> <small>${esc(nd ? nd.name : '')}</small></button><div class="facechips">${chips}</div>${note}</div>`;
+  }).join('');
+  if (faceRev.extra.length) h += `<p class="warn" style="margin-top:.5rem">${esc(t('faces.mismatch', { list: faceRev.extra.join('; ') }))}</p>`;
+  h += `<div class="sheet-actions"><button data-act="facesCreate" ${n ? '' : 'disabled'}>${esc(t('faces.create', { n }))}</button></div>`;
+  return h;
+}
+/** Trechos voltados para fora, coloridos por face (cor + traço distintos) e com a letra da face. */
+function drawFacesOverlay() {
+  const k = pxPerUnit();
+  faceRev.items.forEach(i => {
+    const on = i.exists || faceRev.sel.has(i.id + '|' + i.face), [col, dash] = FACE_STY[i.face];
+    i.segs.forEach(([p, q]) => {
+      const a = { x1: p[0], y1: p[1], x2: q[0], y2: q[1], stroke: col, 'stroke-width': (faceRev.focus === i.id ? 10 : 6) / k, 'stroke-opacity': on ? 0.85 : 0.25, 'pointer-events': 'none' };
+      if (dash) a['stroke-dasharray'] = dash.map(d => d / k).join(' ');
+      svgG.appendChild(Eo('line', a));
+      const lb = txt((p[0] + q[0]) / 2, (p[1] + q[1]) / 2 + 4 / k, i.face, 12 / k, col, '700', 'facelabel');
+      lb.setAttribute('pointer-events', 'none'); lb.setAttribute('stroke', '#fff'); lb.setAttribute('stroke-width', 3 / k); lb.setAttribute('paint-order', 'stroke');
+      svgG.appendChild(lb);
+    });
+  });
+}
+function focusFaceSpace(id) {
+  const n = byId.get(id);
+  if (!n || !faceRev) return;
+  faceRev.focus = id;
+  const r = svgG.getBoundingClientRect();
+  placeCam(n.x, n.y, r.left + r.width / 2, r.top + r.height * 0.35, cam.w);
+  renderGraph(); renderSheet();
+}
+/** Grava as faces marcadas: ligações novas com o exterior (opaco) ou face atribuída à ligação existente sem face. */
+function facesCreate() {
+  const ext = extNode();
+  if (!ext || !faceRev) return;
+  const other = e => (e.a === ext.id ? e.b : e.a);
+  const chosen = faceRev.items.filter(i => !i.exists && faceRev.sel.has(i.id + '|' + i.face));
+  let made = 0, assigned = 0;
+  faceRev = null; sheetFor = null;
+  mutate(() => {
+    const usedFaceless = new Set();
+    for (const i of chosen) {
+      const faceless = model.edges.find(e => (e.a === ext.id || e.b === ext.id) && other(e) === i.id && !e.face && !usedFaceless.has(e));
+      if (faceless) { faceless.face = i.face; usedFaceless.add(faceless); assigned++; }
+      else { model.edges.push({ a: ext.id, b: i.id, kind: 'opaco', face: i.face }); made++; }
+    }
+  });
+  toast(t('faces.created', { n: made, assigned: assigned ? t('faces.assigned', { n: assigned }) : '' }), t('toast.undo'), undo);
+}
+
+/* ---------------- EXEMPLAR: METADADOS, CONFERÊNCIA E EXPORTAÇÃO (F4.3/F4.4) ---------------- */
+const META_TEXT = ['exemplar_id', 'fonte', 'local', 'data', 'codificador'];
+function renderExemplar() {
+  const meta = model.meta || {}, geo = model.geo || {};
+  for (const k of [...META_TEXT, 'notas']) { const el = $('meta_' + k); if (el && document.activeElement !== el) el.value = meta[k] || ''; }
+  const cj = $('meta_conjunto');
+  cj.innerHTML = `<option value="">—</option>` + CONJUNTOS.map(c => `<option value="${c}">${esc(t('conj.' + c))}</option>`).join('');
+  cj.value = meta.conjunto || '';
+  if (document.activeElement !== $('geoModulo')) $('geoModulo').value = geo.modulo_m || '';
+  const items = exemplarChecklist(model);
+  $('exemplarCheck').innerHTML = items.length
+    ? items.map(i => `<li class="${i.level}">${esc(t('chk.' + i.code, { n: i.n ?? '' }))}</li>`).join('')
+    : `<li class="ok">${esc(t('chk.ok'))}</li>`;
+}
+/** Grava um campo de metadados (desfazível); vazio remove o campo. */
+function setMeta(key, value) {
+  const v = String(value || '').trim().slice(0, key === 'notas' ? 4000 : 300);
+  const cur = (model.meta && model.meta[key]) || '';
+  if (v === cur) return;
+  mutate(() => {
+    const m = { ...(model.meta || {}) };
+    if (v) m[key] = v; else delete m[key];
+    if (Object.keys(m).length) model.meta = m; else delete model.meta;
+  });
+}
+function exportExemplar() {
+  const sc = activeScenario(), name = exemplarFileName(model, sc.name) + '.json';
+  const j = JSON.stringify(model, null, 2);
+  download(j, name, 'application/json');
+  putIO(j, name);
+  const imp = exemplarChecklist(model).filter(i => i.level === 'importante');
+  toast(imp.length ? t('toast.exportedMissing', { name, list: imp.map(i => t('chk.' + i.code, { n: i.n ?? '' })).join('; ') }) : t('toast.exported', { name }));
+}
+function exportManifest(all) {
+  const models = all ? project.scenarios.map(s => s.model) : [model];
+  const csv = manifestCSV(models);
+  const name = all ? 'manifesto_projeto.csv' : `manifesto_${exemplarFileName(model, activeScenario().name)}.csv`;
+  download(csv, name, 'text/csv');
+  putIO(csv, name);
+}
+META_TEXT.concat('notas').forEach(k => $('meta_' + k).addEventListener('change', e => setMeta(k, e.target.value)));
+$('meta_conjunto').addEventListener('change', e => setMeta('conjunto', e.target.value));
+$('geoModulo').addEventListener('change', e => {
+  const v = parseFloat(String(e.target.value).replace(',', '.'));
+  mutate(() => {
+    const g = { ...(model.geo || {}) };
+    if (v > 0) g.modulo_m = v; else delete g.modulo_m;
+    if (Object.keys(g).length) model.geo = g; else delete model.geo;
+  });
+});
+$('btnExportEx').addEventListener('click', exportExemplar);
+$('btnManifest').addEventListener('click', () => exportManifest(false));
+$('btnManifestAll').addEventListener('click', () => exportManifest(true));
+$('exInfo').addEventListener('click', e => { e.preventDefault(); openInfo('exemplar'); });
+
+/** Legenda das categorias sob o mapa (modo Pesquisa). */
+function renderKindLegend() {
+  const el = $('kindLegend');
+  if (!el) return;
+  el.innerHTML = researchMode ? EDGE_KINDS.map(k => `<button class="kl" data-info="layer">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('') : '';
+}
+$('kindLegend').addEventListener('click', e => { if (e.target.closest('[data-info]')) openInfo('layer'); });
 function renderSheet() {
   const s = $('sheet');
   if (sheetFor && sheetFor.kind === 'node' && !byId.has(sheetFor.id)) sheetFor = null;
-  if (sheetFor && sheetFor.kind === 'edge' && !model.edges.some(e => sameEdge(e, sheetFor.a, sheetFor.b))) sheetFor = null;
+  if (sheetFor && sheetFor.kind === 'edge' && !findEdge(sheetFor.key)) sheetFor = null;
   if (!sheetFor) { s.hidden = true; s.innerHTML = ''; return; }
   const closeBtn = `<button class="icon" data-act="close" aria-label="${esc(t('close'))}"><svg class="ico"><use href="#i-close"/></svg></button>`;
+  if (sheetFor.kind === 'review') { s.innerHTML = reviewHTML(closeBtn); s.hidden = false; return; }
+  if (sheetFor.kind === 'faces') { s.innerHTML = facesHTML(closeBtn); s.hidden = false; return; }
   if (sheetFor.kind === 'edge') {
-    const { a, b } = sheetFor, na = byId.get(a), nb = byId.get(b);
+    const e = findEdge(sheetFor.key), na = byId.get(e.a), nb = byId.get(e.b);
     s.innerHTML = `<div class="sheet-handle"></div>
-      <div class="sheet-head"><h3>${esc(t('edge.title'))}: ${esc(a)} ↔ ${esc(b)}</h3>${closeBtn}</div>
-      <p class="hint">${esc(na.name)} ↔ ${esc(nb.name)}</p>
+      <div class="sheet-head"><h3>${esc(t('edge.title'))}: ${esc(e.a)} ↔ ${esc(e.b)}</h3>${closeBtn}</div>
+      <p class="hint">${esc(na.name)} ↔ ${esc(nb.name)} · ${esc(t('kind.' + e.kind))}${e.face ? ' · ' + esc(t('edge.face')) + ' ' + e.face : ''}</p>
+      ${researchMode ? edgeEditor(e) : ''}
       <div class="sheet-actions"><button class="danger" data-act="removeLink"><svg class="ico"><use href="#i-trash"/></svg>${esc(t('act.removeLink'))}</button></div>`;
   } else {
     const n = byId.get(sheetFor.id), p = R.per[n.id], isRoot = n.id === model.root;
@@ -695,13 +1160,15 @@ function renderSheet() {
         <span class="chip" style="background:${colourOf(n.id)}"></span><span class="idbadge">${esc(n.id)}</span>
         <input type="text" id="sheetName" value="${esc(n.name)}" maxlength="200" aria-label="${esc(t('name'))}">${closeBtn}
       </div>
-      <div class="sheet-type">${isRoot ? `<span class="badge">${esc(t('root.badge'))}</span>` : ''}
+      <div class="sheet-type">${isRoot ? `<span class="badge">${esc(t('root.badge'))}</span>` : ''}${n.exterior && researchMode ? `<span class="badge ext">${esc(t('badge.ext'))}</span>` : ''}
         <button class="linkish" data-info="type">${esc(t('type'))} <b>${p.type}</b> — ${esc(t('type.' + p.type))}</button></div>
       <label class="labelrow"><span>${esc(t('label'))}</span><input type="text" id="sheetLabel" list="labelOptions" value="${esc(n.label || '')}" maxlength="60" placeholder="${esc(t('label.ph'))}" autocomplete="off"></label>
+      ${facesLine(n.id)}
       <div class="mgrid">${rows}</div>
       ${narrow.matches ? `<button class="linkish more" data-act="more" aria-expanded="${sheetExpanded}">${esc(t(sheetExpanded ? 'sheet.less' : 'sheet.more'))}</button>` : ''}
       <div class="sheet-actions">
         <button class="ghost" data-act="root" ${isRoot ? 'disabled' : ''}><svg class="ico"><use href="#i-root"/></svg>${esc(t('act.root'))}</button>
+        ${researchMode ? `<button class="ghost" data-act="toggleExt">${esc(t(n.exterior ? 'act.unExt' : 'act.setExt'))}</button>` : ''}
         <button class="ghost" data-act="link"><svg class="ico"><use href="#i-link"/></svg>${esc(t('act.linkTo'))}</button>
         <button class="danger" data-act="delete"><svg class="ico"><use href="#i-trash"/></svg>${esc(t('act.delete'))}</button>
       </div>`;
@@ -720,10 +1187,24 @@ $('sheet').addEventListener('click', e => {
     case 'root': setRoot(target.id); break;
     case 'link': setView('graph'); setMode('link'); linkFrom = target.id; closeSheet(); refreshSel(); break;
     case 'delete': armConfirm(b, () => deleteNodes([target.id])); break;
-    case 'removeLink': removeEdge(target.a, target.b); break;
+    case 'removeLink': removeEdge(target.key); break;
+    case 'setKind': setEdgeKind(target.key, b.dataset.k); break;
+    case 'revWeld': reviewWeld(); break;
+    case 'revCreate': reviewCreate(); break;
+    case 'facesCreate': facesCreate(); break;
+    case 'toggleExt': toggleExterior(target.id); break;
   }
 });
 $('sheet').addEventListener('change', e => {
+  if (e.target.dataset && e.target.dataset.facesel && faceRev) {
+    if (e.target.checked) faceRev.sel.add(e.target.dataset.facesel); else faceRev.sel.delete(e.target.dataset.facesel);
+    renderSheet(); renderGraph(); return;
+  }
+  if (e.target.dataset && e.target.dataset.rev && review) {
+    if (e.target.checked) review.sel.add(e.target.dataset.rev); else review.sel.delete(e.target.dataset.rev);
+    renderSheet(); renderGraph(); return;
+  }
+  if (e.target.id === 'edgeFace' && sheetFor && sheetFor.kind === 'edge') { setEdgeFace(sheetFor.key, e.target.value); return; }
   if (e.target.id === 'sheetLabel' && sheetFor) {
     const lab = e.target.value.trim().slice(0, 60), n = byId.get(sheetFor.id);
     if (n && lab !== (n.label || '')) mutate(() => { if (lab) n.label = lab; else delete n.label; });
@@ -794,14 +1275,15 @@ function drawJGraph(svg, m, Rx, sel = new Set()) {
   }
   // arestas da árvore de busca em largura a partir da raiz; as demais (anéis) tracejadas
   const adj = new Map(m.nodes.map(n => [n.id, []]));
-  m.edges.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
+  const pairs = pairsOf(m);
+  pairs.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
   const key = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
   const tree = new Set();
   if (m.root && adj.has(m.root)) {
     const seen = new Set([m.root]), q = [m.root];
     for (let h = 0; h < q.length; h++) for (const w of adj.get(q[h])) if (!seen.has(w)) { seen.add(w); tree.add(key(q[h], w)); q.push(w); }
   }
-  m.edges.forEach(([a, b]) => {
+  pairs.forEach(([a, b]) => {
     if (!pj[a] || !pj[b]) return;
     const isTree = tree.has(key(a, b));
     svg.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: isTree ? C.wall : C.accent, 'stroke-width': isTree ? 1.8 : 1.2, 'stroke-dasharray': isTree ? '' : '5 3', 'stroke-opacity': isTree ? 0.9 : 0.7 }));
@@ -861,7 +1343,7 @@ function renderResults() {
     : `<span class="ok">${esc(t('val.ok'))}</span>`);
   const f3 = v => (v == null ? '—' : v.toFixed(3));
   const cards = [
-    ['card.k', g.k, 'k'], ['card.L', g.L, 'L'], ['card.rings', g.circuit, 'rings'], ['card.ringiness', g.ringiness.toFixed(3), 'ringiness'],
+    ['card.k', g.k, 'k'], [researchMode ? 'card.L' : 'card.Lsimple', g.L, 'L'], ...(researchMode ? [['card.layer', t('layer.' + layer), 'layer']] : []), ['card.rings', g.circuit, 'rings'], ['card.ringiness', g.ringiness.toFixed(3), 'ringiness'],
     ['card.meanConn', g.meanConn.toFixed(2), 'meanConn'], ['card.meanMD', f3(g.meanMD), 'md'], ['card.meanInt', f3(g.meanInt), 'integ'],
     ['card.meanRRA', f3(g.meanRRA), 'rra'], ['card.diameter', g.diameter, 'diameter'], ['card.Hs', f3(g.Hs), 'Hs'],
     ['card.int', f3(g.intelligibility), 'intelligibility'],
@@ -891,7 +1373,8 @@ function renderResults() {
     </button>`;
   }).join('');
   renderFunctional();
-  $('methodFoot').innerHTML = t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
+  renderOrientation();
+  $('methodFoot').innerHTML = (researchMode ? t('method.layer', { layer: t('layer.' + layer), kinds: [...layerKinds(layer, layerOpts())].map(k => t('kind.' + k)).join(', ') }) : '') + t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
     t(conv.differenceFactor === 'ra' ? 'method.h.ra' : 'method.h.int') + t('method.tail');
 }
 $('resTable').querySelector('thead').addEventListener('click', e => {
@@ -910,7 +1393,7 @@ function pickFromResults(e) {
 $('resTable').querySelector('tbody').addEventListener('click', pickFromResults);
 $('spaceCards').addEventListener('click', pickFromResults);
 /** Resultado global (raio 0) — o genótipo e o H* entre funções são propriedades da configuração inteira. */
-const globalOf = (m, Rx) => (radius === 0 ? Rx : runAnalysis(m, { ...conv, radius: 0 }));
+const globalOf = (m, Rx) => (radius === 0 ? Rx : analyse(m, 0));
 function renderFunctional() {
   const box = $('funcBox');
   const F = functionalSummary(model, globalOf(model, R));
@@ -923,6 +1406,30 @@ function renderFunctional() {
     ${F.stats.map(s => `<tr><td class="name">${esc(s.label)} <span class="mini">${esc(s.ids.join(', '))}</span></td><td>${s.ids.length}</td><td><b>${f3(s.meanInteg)}</b></td><td>${f3(s.meanRRA)}</td><td>${s.meanDepth == null ? '—' : s.meanDepth.toFixed(2)}</td></tr>`).join('')}
     </tbody></table></div>`;
 }
+/** Faces da envoltória para as quais o espaço abre (só com exterior marcado e faces registradas). */
+function facesLine(id) {
+  if (!researchMode) return '';
+  const o = orientation(model).perSpace[id];
+  if (!o) return '';
+  const parts = FACES.filter(f => o.faces[f]).map(f => `<b>${f}</b> ${esc(t('kind.' + o.faces[f]))}`);
+  return `<button class="linkish faces" data-info="orientation">${esc(t('sheet.faces'))}: ${parts.join(' · ')}</button>`;
+}
+function renderOrientation() {
+  const box = $('orientBox'), O = orientation(model);
+  if (!researchMode) { box.hidden = true; return; }
+  const spaces = model.nodes.filter(n => O.perSpace[n.id]);
+  box.hidden = !spaces.length && !O.noFace;
+  if (box.hidden) return;
+  const kindCell = k => (k ? `<span class="kind k-${k}">${esc(t('kind.' + k))}</span>` : '—');
+  const byFace = FACES.map(f => `<tr><th class="name">${f}</th>${['opaco', 'vista', 'acesso', 'aberto'].map(k => `<td>${O.byFace[f][k] || '—'}</td>`).join('')}</tr>`).join('');
+  box.innerHTML = `<h4>${esc(t('orient.title'))} <button class="linkish" data-info="orientation">ⓘ</button></h4>
+    ${O.noFace ? `<p class="bad" style="margin:.2rem 0">${esc(t('orient.noFace', { n: O.noFace }))}</p>` : ''}
+    ${spaces.length ? `<div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.id'))}</th>${FACES.map(f => `<th>${f}</th>`).join('')}</tr></thead><tbody>
+      ${spaces.map(n => `<tr><td class="name">${esc(n.id)} · ${esc(n.name)}</td>${FACES.map(f => `<td>${kindCell(O.perSpace[n.id].faces[f])}</td>`).join('')}</tr>`).join('')}
+    </tbody></table></div>
+    <div class="tablewrap" style="display:block;margin-top:.5rem"><table><thead><tr><th class="name">${esc(t('orient.byFace'))}</th>${['opaco', 'vista', 'acesso', 'aberto'].map(k => `<th>${esc(t('kind.' + k))}</th>`).join('')}</tr></thead><tbody>${byFace}</tbody></table></div>` : ''}`;
+}
+$('orientBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('funcBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('globalCards').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('sortSel').addEventListener('change', e => { sortKey = e.target.value; sortDir = isTextKey(sortKey) ? 1 : -1; renderResults(); });
@@ -969,7 +1476,7 @@ function duplicateScenario() {
 /** Novo cenário em branco = outro projeto (família própria), começa só com o exterior. */
 function newScenario() {
   const id = newScenarioId(project.scenarios.map(x => x.id));
-  const m = migrateModel({ nodes: [{ id: 'X', name: t('scn.exterior'), x: W0 / 2, y: H0 - 60, label: t('scn.exterior') }], edges: [], root: 'X' });
+  const m = migrateModel({ nodes: [{ id: 'X', name: t('scn.exterior'), x: W0 / 2, y: H0 - 60, label: t('scn.exterior'), exterior: true }], edges: [], root: 'X' });
   addScenario({ id, name: t('scn.default', { n: project.scenarios.length + 1 }), family: id, model: m });
 }
 function deleteScenario(id) {
@@ -1003,8 +1510,9 @@ function importScenarios(pr) {
     if (!famMap.has(sc.family)) famMap.set(sc.family, idMap.get(sc.family) || idMap.get(sc.id));
     project.scenarios.push({ id: idMap.get(sc.id), name: sc.name, family: famMap.get(sc.family), model: sc.model });
   });
-  toast(t('toast.imported', { n: incoming.length }));
   switchScenario(idMap.get(incoming[0].id));
+  if (!researchMode && incoming.some(sc => hasResearchData(sc.model))) hintResearch(incoming.find(sc => hasResearchData(sc.model)).model);
+  else toast(t('toast.imported', { n: incoming.length }));
 }
 
 /* ---------------- COMPARAR ---------------- */
@@ -1029,7 +1537,7 @@ function drawMiniMap(svg, m, Rx, colour) {
     const c = colour(n.id);
     svg.appendChild(Eo('polygon', { points: n.poly.map(p => p.join(',')).join(' '), fill: c, 'fill-opacity': 0.22, stroke: c, 'stroke-width': 1.2 * k }));
   });
-  m.edges.forEach(([a, b2]) => {
+  pairsOf(m).forEach(([a, b2]) => {
     const A = pos.get(a), B = pos.get(b2);
     svg.appendChild(Eo('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, stroke: C.wall, 'stroke-width': 1.4 * k, 'stroke-opacity': 0.55 }));
   });
@@ -1098,7 +1606,7 @@ function renderCompare() {
       rows += `<tr><th class="name rowh"><button class="linkish" data-info="genotype">${esc(t('cmp.genotype'))}</button></th>${scs.map(sc => `<td class="name wrap">${esc(functionalSummary(sc.model, globalOf(sc.model, res.get(sc.id))).inequality || '—')}</td>`).join('')}</tr>`;
     }
     box.innerHTML = `<div class="tablewrap" style="display:block"><table class="cmp-table"><thead><tr><th class="name">${esc(t('cmp.indicator'))}</th>${scs.map(sc => `<th>${esc(sc.name)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="foot">${esc(t('cmp.maxMin'))} ${esc(t('cmp.sizeNote'))}</p>`;
+      <p class="foot">${researchMode ? esc(t('cmp.layerNote', { layer: t('layer.' + layer) })) + ' ' : ''}${esc(t('cmp.maxMin'))} ${esc(t('cmp.sizeNote'))}</p>`;
     return;
   }
 
@@ -1187,11 +1695,14 @@ function showImageOverlay(url, name) {
   $('ovl').style.display = 'flex';
 }
 function tableCSV() {
-  const cols = ['id', 'name', 'label', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+  // modo Simples: mesmas colunas de antes; modo Pesquisa acrescenta camada e faces
+  const cols = ['id', 'name', 'label', ...(researchMode ? ['camada', 'faces'] : []), 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+  const orient = orientation(model).perSpace;
   let out = cols.join(',') + '\n';
   model.nodes.forEach(n => {
     const p = R.per[n.id];
-    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
+    const faces = orient[n.id] ? FACES.filter(f => orient[n.id].faces[f]).map(f => f + ':' + orient[n.id].faces[f]).join(';') : '';
+    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', ...(researchMode ? [layer, faces] : []), p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
       .map(v => (typeof v === 'number' ? (+v).toFixed(4) : v == null ? '' : v)).join(',') + '\n';
   });
   return out;
@@ -1266,7 +1777,7 @@ $('edgeList').addEventListener('click', e => {
   const i = del ? +del.dataset.dele : open ? +open.dataset.edge : -1;
   const ed = model.edges[i];
   if (!ed) return;
-  if (del) removeEdge(ed[0], ed[1]); else selectEdge(ed[0], ed[1]);
+  if (del) removeEdge(edgeKey(ed)); else selectEdge(edgeKey(ed));
 });
 $('addEdge').addEventListener('click', () => addEdge($('edgeA').value, $('edgeB').value));
 $('rootSel').addEventListener('change', e => setRoot(e.target.value));
@@ -1276,7 +1787,27 @@ $('optValues').addEventListener('change', e => { showValues = e.target.checked; 
 $('optRadius').addEventListener('change', e => { radius = clamp(parseInt(e.target.value, 10) || 0, 0, 99); recompute(); });
 $('optEntropy').addEventListener('change', e => { conv.entropy = e.target.value; recompute(); });
 $('optHFactor').addEventListener('change', e => { conv.differenceFactor = e.target.value; recompute(); });
-$('btnDerive').addEventListener('click', deriveAdjacency);
+document.querySelectorAll('[data-mode-btn]').forEach(b => b.addEventListener('click', () => setResearchMode(b.dataset.modeBtn === 'research')));
+$('optDoorVisual').addEventListener('change', e => { doorIsVisual = e.target.checked; recompute(); });
+document.addEventListener('change', e => {
+  if (!e.target.classList || !e.target.classList.contains('layer-sel')) return;
+  layer = e.target.value;
+  recompute();
+});
+$('btnDerive').addEventListener('click', openReview);
+$('btnCalib').addEventListener('click', () => { setView('graph'); setMode('measure'); });
+$('btnExt').addEventListener('click', createExterior);
+$('btnFaces').addEventListener('click', openFaceReview);
+$('northRange').addEventListener('input', e => { $('northNum').value = e.target.value; renderCompass(+e.target.value); });
+$('northRange').addEventListener('change', e => setNorth(+e.target.value));
+$('northNum').addEventListener('change', e => setNorth(parseFloat(e.target.value) || 0));
+$('compass').addEventListener('click', () => {
+  if (narrow.matches) setView('model');
+  const g = $('grpOrient'); g.open = true; g.scrollIntoView({ block: 'center' }); $('northNum').focus();
+});
+$('optTol').addEventListener('change', e => { tolCm = clamp(parseFloat(e.target.value) || 15, 0.5, 500); autosave(); if (review) { refreshReview(); renderSheet(); renderGraph(); } renderPanel(); });
+$('optMinContact').addEventListener('change', e => { minContactCm = clamp(parseFloat(e.target.value) || 30, 1, 2000); autosave(); if (review) { refreshReview(); renderSheet(); renderGraph(); } renderPanel(); });
+$('ctxBar').addEventListener('keydown', e => { if (e.target.id === 'calibM' && e.key === 'Enter') applyCalibration(); });
 
 $('bgFile').addEventListener('change', e => {
   const f = e.target.files && e.target.files[0];
@@ -1305,12 +1836,39 @@ $('btnLoad').addEventListener('click', () => {
     const data = JSON.parse($('io').value);
     w.hidden = true;
     if (data && typeof data === 'object' && 'scenarios' in data) { importScenarios(migrateProject(data)); return; }
-    const m = migrateModel(data);
+    const { model: m, warnings } = migrateModelWithReport(data);
     const pre = snapshot(); setModel(m); selSet.clear(); commit(pre); recompute(); fitView();
+    if (warnings.length) { w.hidden = false; w.textContent = '⚠ ' + warnings.join(' '); }
+    hintResearch(m);
   } catch (err) {
     w.hidden = false;
     w.textContent = '⚠ ' + (err instanceof SyntaxError ? t('err.json') : err.message) + ' ' + t('err.expect');
   }
+});
+/** Abre um .json do disco (exemplar v1–v3 ou projeto) como cenário(s) novo(s); nada é sobrescrito. */
+$('btnOpenFile').addEventListener('click', () => $('fileOpen').click());
+$('fileOpen').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const w = $('ioWarn');
+  f.text().then(text => {
+    try {
+      const data = JSON.parse(text);
+      w.hidden = true;
+      if (data && typeof data === 'object' && 'scenarios' in data) { importScenarios(migrateProject(data)); return; }
+      const { model: m, warnings } = migrateModelWithReport(data);
+      const id = newScenarioId(project.scenarios.map(s => s.id));
+      const name = ((m.meta && m.meta.exemplar_id) || f.name.replace(/\.json$/i, '')).slice(0, 80);
+      if (addScenario({ id, name, family: id, model: m })) {
+        toast(t('toast.fileOpened', { name }));
+        if (warnings.length) { w.hidden = false; w.textContent = '⚠ ' + warnings.join(' '); $('grpIO').open = true; }
+        hintResearch(m);
+      }
+    } catch (err) {
+      w.hidden = false; $('grpIO').open = true;
+      w.textContent = '⚠ ' + f.name + ': ' + (err instanceof SyntaxError ? t('err.json') : err.message);
+    }
+  }).finally(() => { e.target.value = ''; });
 });
 $('btnReset').addEventListener('click', () => { const pre = snapshot(); setModel(migrateModel(VALIDATED)); selSet.clear(); currentMeasure = 'integ'; radius = 0; commit(pre); recompute(); fitView(); });
 $('scnSel').addEventListener('change', e => switchScenario(e.target.value));
@@ -1335,15 +1893,17 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (selSet.size) { e.preventDefault(); deleteNodes([...selSet]); }
-    else if (selEdge) { e.preventDefault(); removeEdge(selEdge[0], selEdge[1]); }
+    else if (selEdge) { e.preventDefault(); removeEdge(selEdge); }
     return;
   }
+  if (researchMode && selEdge && /^[1-4]$/.test(k)) { setEdgeKind(selEdge, EDGE_KINDS[+k - 1]); return; }
   if (k === 'n') addNodeAt(lastMouse.x, lastMouse.y);
   if (k === 'l' && selSet.size === 2) { const [a, b] = [...selSet]; addEdge(a, b); }
   if (k === 'r' && selSet.size === 1) setRoot([...selSet][0]);
   if (e.key === 'Enter' && mode === 'poly') finishPoly();
   if (e.key === 'Escape') {
-    if (mode === 'poly' && poly.pts.length) cancelPoly();
+    if (mode === 'measure') setMode('select');
+    else if (mode === 'poly' && poly.pts.length) cancelPoly();
     else if (linkFrom) cancelLink();
     else clearSelection();
   }
@@ -1355,6 +1915,8 @@ setLang(getLang());
 applyI18n();
 $('btnLang').textContent = getLang() === 'pt' ? 'EN' : 'PT';
 document.documentElement.classList.toggle('projector', projector);
+document.body.classList.toggle('research', researchMode);
+document.querySelectorAll('[data-mode-btn]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.modeBtn === 'research') === researchMode)));
 $('btnProjector').setAttribute('aria-pressed', String(projector));
 $('bgControls').hidden = !bg.img;
 Object.entries(BG_INPUTS).forEach(([id, key]) => { $(id).value = bg[key]; });

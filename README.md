@@ -22,8 +22,30 @@ src/engine/           motor de análise (TypeScript puro, sem DOM)
   graph.ts            grafo CSR, BFS, Brandes (choice), blocos biconexos
   analyse.ts          medidas por espaço e do sistema
 src/util/html.ts      escape de texto do usuário
-tests/                testes (Vitest): modelo validado de 10 nós + grafos canônicos
+src/geometry/         ímã, detecção de vizinhança, exterior e faces
+public/schema/        JSON Schema v3 + exemplos
+public/protocolo.html protocolo de codificação de exemplares
+tests/                testes (Vitest): motor, schema v3, geometria (ímã, vizinhança, exterior), exemplar
 ```
+
+## Modo Pesquisa (codificação de exemplares)
+O app tem dois modos de trabalho (Modelo → Modo de trabalho). O **Simples** (padrão) é o grafo de permeabilidade de sempre. O **Pesquisa** acrescenta, sem substituir nada:
+- categorias de interface por ligação (opaco, vista, acesso, aberto), com cor e traço próprios;
+- camadas de análise (acesso, visual, adjacência) e orientação por face (N, S, L, O);
+- desenho regularizado: ímã em cantos e paredes e "usar a parede inteira" (valem também no Simples);
+- escala por calibração, detecção de vizinhanças com revisão (certa, provável, duvidosa) e "fechar frestas";
+- exterior, norte e sugestão de faces com revisão;
+- metadados do exemplar, conferência, exportação do exemplar (JSON v3) e manifesto (CSV);
+- abertura de arquivos `.json` (exemplares ou projetos, inclusive gerados em Python) como cenários novos.
+
+Passo a passo para quem codifica: [`public/protocolo.html`](public/protocolo.html) (publicado como `protocolo.html`).
+
+## Formato de dados (schema 3, modo pesquisa)
+- Ligações são objetos `{a, b, kind, face?}`, com `kind` ∈ {opaco, vista, acesso, aberto}. A `face` (N, S, L, O) só existe em ligações com o nó `exterior`.
+- **Unicidade:** uma ligação por par entre espaços interiores; uma por par **e por face** com o exterior (um cômodo de canto pode abrir para duas faces).
+- **Camadas analisadas:** acesso = {acesso, aberto}; visual = {vista, acesso, aberto}; adjacência = todas. O motor recebe só os pares da camada (`layerInput`).
+- Arquivos v1/v2 continuam abrindo: cada `[a,b]` vira `{a, b, kind: "acesso"}`, e a análise sai idêntica.
+- Especificação em `public/schema/v3.json` (JSON Schema draft-07), com exemplos em `public/schema/examples/`. É o mesmo arquivo usado pelo validador Python da pesquisa.
 
 ## Convenções (padrão = depthmapX 0.9.1)
 - **Entropia:** `p_d = n_d/k` incluindo o próprio espaço em d=0 (`axialintegration.cpp`). Opção: convenção v1 `n_d/(k−1)`.

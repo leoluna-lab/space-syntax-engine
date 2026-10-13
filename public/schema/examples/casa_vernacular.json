@@ -1,0 +1,38 @@
+{
+  "schema": 3,
+  "nodes": [
+    { "id": "ext", "name": "Exterior", "x": 300, "y": 700, "exterior": true, "label": "exterior" },
+    { "id": "q1", "name": "Quarto 1", "x": 150, "y": 125, "poly": [[0, 0], [300, 0], [300, 250], [0, 250]], "label": "dormitório" },
+    { "id": "q2", "name": "Quarto 2", "x": 450, "y": 125, "poly": [[300, 0], [600, 0], [600, 250], [300, 250]], "label": "dormitório" },
+    { "id": "s1", "name": "Sala", "x": 200, "y": 350, "poly": [[0, 250], [400, 250], [400, 450], [0, 450]], "label": "estar" },
+    { "id": "c1", "name": "Cozinha", "x": 500, "y": 350, "poly": [[400, 250], [600, 250], [600, 450], [400, 450]], "label": "cozinha" },
+    { "id": "v1", "name": "Varanda", "x": 300, "y": 525, "poly": [[0, 450], [600, 450], [600, 600], [0, 600]], "label": "varanda" }
+  ],
+  "edges": [
+    { "a": "ext", "b": "q1", "kind": "vista", "face": "N" },
+    { "a": "ext", "b": "q1", "kind": "vista", "face": "O" },
+    { "a": "ext", "b": "q2", "kind": "vista", "face": "N" },
+    { "a": "ext", "b": "q2", "kind": "opaco", "face": "L" },
+    { "a": "ext", "b": "s1", "kind": "vista", "face": "O" },
+    { "a": "ext", "b": "c1", "kind": "acesso", "face": "L" },
+    { "a": "ext", "b": "v1", "kind": "aberto", "face": "S" },
+    { "a": "ext", "b": "v1", "kind": "aberto", "face": "L" },
+    { "a": "ext", "b": "v1", "kind": "aberto", "face": "O" },
+    { "a": "q1", "b": "q2", "kind": "opaco" },
+    { "a": "q1", "b": "s1", "kind": "acesso" },
+    { "a": "q2", "b": "s1", "kind": "acesso" },
+    { "a": "q2", "b": "c1", "kind": "opaco" },
+    { "a": "s1", "b": "c1", "kind": "vista" },
+    { "a": "s1", "b": "v1", "kind": "acesso" },
+    { "a": "c1", "b": "v1", "kind": "aberto" }
+  ],
+  "root": "ext",
+  "geo": { "norte_graus": 0, "escala_m_por_unidade": 0.01, "modulo_m": 1 },
+  "meta": {
+    "exemplar_id": "exemplo01",
+    "conjunto": "sintetico",
+    "fonte": "Exemplo fictício para testar o schema",
+    "codificador": "space-syntax-engine",
+    "notas": "Não é um exemplar real. Mostra as 4 categorias de interface e cômodos de canto com duas faces para o exterior (q1: N e O; q2: N e L)."
+  }
+}

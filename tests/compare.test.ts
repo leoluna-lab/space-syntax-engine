@@ -15,7 +15,7 @@ describe('migrateProject', () => {
     expect(p.scenarios).toHaveLength(1);
     expect(p.scenarios[0]).toMatchObject({ id: 's1', name: 'Planta', family: 's1' });
     expect(p.activeId).toBe('s1');
-    expect(p.scenarios[0].model.schema).toBe(2);
+    expect(p.scenarios[0].model.schema).toBe(3);
   });
 
   it('projeto válido é preservado e idempotente', () => {

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Protocolo de codificação de exemplares — Space Syntax Engine</title>
+<style>
+  :root { --paper: #f3efe6; --panel: #faf8f2; --ink: #1c1b18; --ink2: #5a564c; --muted: #8c8679; --rule: #d8d2c4; --accent: #b23a2e; --blue: #2f5d8a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.6 "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+  h1 { font-family: "Palatino Linotype", Palatino, Georgia, serif; font-size: 1.8rem; line-height: 1.2; margin: .5rem 0 .2rem; }
+  h2 { font-family: "Palatino Linotype", Palatino, Georgia, serif; font-size: 1.3rem; margin: 2rem 0 .5rem; border-bottom: 1px solid var(--rule); padding-bottom: .2rem; }
+  h3 { font-size: 1rem; margin: 1.2rem 0 .3rem; }
+  .sub { font-family: Menlo, Consolas, monospace; font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  .lead { color: var(--ink2); }
+  ol.steps { padding-left: 1.3rem; }
+  ol.steps > li { margin: .7rem 0; }
+  ol.steps > li > b:first-child { display: block; }
+  .where { font-family: Menlo, Consolas, monospace; font-size: .8rem; color: var(--blue); }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; background: var(--panel); }
+  th, td { border: 1px solid var(--rule); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--ink); color: var(--paper); font-weight: 600; }
+  svg.sw { width: 54px; height: 14px; vertical-align: middle; }
+  .box { border: 1px solid var(--rule); background: var(--panel); border-radius: 8px; padding: .7rem .9rem; margin: .8rem 0; }
+  .todo { border-color: var(--accent); background: #fbe9e6; }
+  .todo b { color: var(--accent); }
+  code { font-family: Menlo, Consolas, monospace; font-size: .85rem; background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 0 .25rem; }
+  a { color: var(--blue); }
+  @media print { body { background: #fff; } a { color: var(--ink); } }
+</style>
+</head>
+<body>
+<main>
+<div class="sub">Space Syntax Engine · modo Pesquisa</div>
+<h1>Protocolo de codificação de exemplares</h1>
+<p class="lead">Como transformar a planta de uma casa (levantamento, desenho de arquivo, croqui) em um <b>exemplar</b>: um arquivo com os espaços convexos, as interfaces entre eles, as faces voltadas para fora e os dados de origem. Todos os exemplares precisam ser codificados do mesmo jeito para que possam ser comparados entre si e com as plantas geradas pelo programa.</p>
+
+<div class="box"><b>Antes de começar:</b> abra o aplicativo, vá em <span class="where">Modelo → Modo de trabalho → Pesquisa</span> e crie um cenário para a casa em <span class="where">Modelo → Cenários → Novo em branco</span> (cada casa = um cenário). Os dados ficam no navegador do aparelho; exporte o exemplar ao terminar (passo 10).</div>
+
+<h2>1. Passo a passo</h2>
+<ol class="steps">
+  <li><b>Planta de fundo.</b> Carregue a imagem da planta em <span class="where">Modelo → Planta de fundo</span> e ajuste opacidade, rotação e escala até ficar confortável para traçar por cima.</li>
+  <li><b>Escala.</b> Em <span class="where">Modelo → Polígonos convexos → Escala → Calibrar</span>, toque nos dois extremos de uma medida conhecida (uma parede cotada) e informe a distância real em metros. Sem escala, as tolerâncias ficam provisórias. Se a casa tiver modulação, informe o <b>módulo</b> em metros no formulário do exemplar.</li>
+  <li><b>Espaços convexos.</b> No modo <b>Convexo</b> (pentágono), toque os vértices de cada espaço e feche tocando no primeiro ponto. Um espaço é convexo quando nenhuma reta entre dois pontos dele sai dele (Hillier &amp; Hanson 1984); um cômodo em L vira <b>dois</b> espaços. Use o ímã: o ponto gruda nos cantos (círculo azul) e nas paredes (losango) dos vizinhos. Para dois cômodos que dividem a parede, comece o segundo sobre a parede do primeiro e toque <b>"Usar a parede inteira"</b>.</li>
+  <li><b>Função.</b> Toque em cada espaço e preencha <b>Função</b> (estar, cozinha, dormitório, varanda, circulação…). Use sempre os mesmos nomes em todos os exemplares.</li>
+  <li><b>Vizinhanças.</b> Em <span class="where">Polígonos convexos → Detectar vizinhanças…</span>, confira a lista. <b>Certas</b> e <b>prováveis</b> vêm marcadas; <b>duvidosas</b> só entram se você marcar. Toque num par para vê-lo no mapa. Se houver frestas, use <b>Fechar frestas</b> e depois <b>Criar ligações</b>. Toda vizinhança entra como <code>opaco</code>; a categoria certa vem no passo 8. <b>Todo</b> par de espaços que se toca deve ter ligação, inclusive os separados por parede cega.</li>
+  <li><b>Exterior.</b> Em <span class="where">Exterior e orientação</span>, toque <b>Criar exterior</b> (um único nó representa todo o lado de fora; ele vira a raiz do grafo).</li>
+  <li><b>Norte e faces.</b> Informe para onde aponta o norte (0° = para cima da tela, sentido horário). Toque <b>Sugerir faces…</b>: o aplicativo propõe, para cada espaço, as faces (N, S, L, O) em que ele encosta no exterior. Desmarque o que estiver errado (por exemplo, um pátio interno ou um espaço que faltou desenhar) e grave. Um cômodo de canto tem uma ligação para cada face.</li>
+  <li><b>Categoria de cada ligação.</b> Toque em cada ligação (no mapa ou na lista) e escolha a categoria pela tabela da seção 2. No computador, as teclas 1–4 também mudam a categoria da ligação selecionada.</li>
+  <li><b>Metadados.</b> Preencha em <span class="where">Exemplar</span>: identificador, conjunto, fonte, local, data, quem codificou e notas (registre ali as decisões difíceis).</li>
+  <li><b>Conferir e exportar.</b> A lista <b>Conferência</b> aponta o que falta; itens em vermelho comprometem o uso do exemplar. Toque <b>Exportar exemplar (JSON)</b> — o arquivo leva o nome do identificador — e <b>Manifesto (CSV)</b>. Envie os dois arquivos para a coordenação da pesquisa.</li>
+</ol>
+
+<h2>2. Categorias de interface</h2>
+<p>A categoria é do <b>par de espaços</b>, não de cada abertura: cada par tem uma única ligação (com o exterior, uma por face).</p>
+<table>
+  <thead><tr><th>Categoria</th><th>Traço no mapa</th><th>Quando usar</th><th>Exemplos</th></tr></thead>
+  <tbody>
+    <tr><td><b>opaco</b></td><td><svg class="sw" viewBox="0 0 54 14"><line x1="3" y1="7" x2="51" y2="7" stroke="#8c8679" stroke-width="2" stroke-dasharray="1 4" stroke-linecap="round"/></svg> pontilhado</td><td>Os espaços se tocam, mas não há passagem nem vista.</td><td>parede cega, divisória fechada</td></tr>
+    <tr><td><b>vista</b></td><td><svg class="sw" viewBox="0 0 54 14"><line x1="3" y1="7" x2="51" y2="7" stroke="#2f5d8a" stroke-width="2" stroke-dasharray="7 4"/></svg> tracejado</td><td>Há vista (ou ar, luz) de um para o outro, mas não se passa.</td><td>janela, cobogó, treliça, bandeira vazada, peitoril</td></tr>
+    <tr><td><b>acesso</b></td><td><svg class="sw" viewBox="0 0 54 14"><line x1="3" y1="7" x2="51" y2="7" stroke="#2a2824" stroke-width="2.2"/></svg> contínuo</td><td>Passa-se por uma porta (que pode ser fechada).</td><td>porta, porta-janela, portão</td></tr>
+    <tr><td><b>aberto</b></td><td><svg class="sw" viewBox="0 0 54 14"><line x1="3" y1="7" x2="51" y2="7" stroke="#2a2824" stroke-width="6"/><line x1="3" y1="7" x2="51" y2="7" stroke="#faf8f2" stroke-width="2.2"/></svg> linha dupla</td><td>Não há divisão: os dois espaços se abrem inteiramente um para o outro. Continuam sendo <b>dois</b> espaços convexos.</td><td>vão livre, arco sem porta, varanda aberta para o terreiro</td></tr>
+  </tbody>
+</table>
+
+<div class="box todo"><b>Regra provisória — a confirmar pela coordenação:</b> quando um mesmo par tem aberturas de tipos diferentes (por exemplo, porta e janela na mesma parede), registre a <b>mais permeável</b>: aberto &gt; acesso &gt; vista &gt; opaco. Anote o caso nas notas do exemplar.</div>
+
+<h3>Casos frequentes</h3>
+<ul>
+  <li><b>Porta para fora:</b> ligação <code>acesso</code> entre o espaço e o exterior, na face em que a porta está.</li>
+  <li><b>Janela para fora:</b> ligação <code>vista</code> com o exterior, na face da janela. Parede externa sem abertura: <code>opaco</code>.</li>
+  <li><b>Varanda:</b> é um espaço convexo; sua relação com o exterior costuma ser <code>aberto</code> em cada face livre.</li>
+  <li><b>Cômodo em L ou em T:</b> divida em espaços convexos ligados por <code>aberto</code>.</li>
+  <li><b>Encostar só pela quina:</b> não é vizinhança; não crie ligação.</li>
+</ul>
+
+<h2>3. Conjuntos</h2>
+<table>
+  <tbody>
+    <tr><th>definição</th><td>Os exemplares reais que definem o padrão (genótipo) estudado.</td></tr>
+    <tr><th>validação</th><td>Exemplares novos, codificados depois, para testar se o padrão prevê casas que não foram usadas para defini-lo.</td></tr>
+    <tr><th>sintético</th><td>Plantas geradas pelo programa (não use para casas reais).</td></tr>
+  </tbody>
+</table>
+
+<h2>4. Boas práticas</h2>
+<ul>
+  <li>Codifique o que a fonte mostra, não o que você supõe; registre dúvidas nas notas.</li>
+  <li>Use sempre o mesmo vocabulário de funções.</li>
+  <li>Exporte o exemplar ao terminar cada sessão: os dados do navegador podem ser apagados pelo sistema (especialmente no iPhone).</li>
+  <li>O arquivo exportado segue o schema público <a href="./schema/v3.json">schema/v3.json</a>, o mesmo usado pelo validador da pesquisa.</li>
+</ul>
+
+<h2 lang="en">English summary</h2>
+<p lang="en">Switch to <b>Research</b> mode and create one scenario per house. Load the plan as background, calibrate the scale, draw the convex spaces (the magnet snaps to neighbours' corners and walls; use "Use the whole wall" for shared walls) and set each space's function. Run <b>Detect neighbours…</b>, review, close gaps and create the links (all start as <i>opaque</i>). Create the exterior, set north and run <b>Suggest faces…</b>. Then classify every link: <b>opaque</b> (blank wall), <b>view</b> (window, cobogó), <b>access</b> (door), <b>open</b> (no partition; still two convex spaces). Fill in the metadata, check the list, and export the exemplar (JSON, schema 3) and the manifest (CSV). Provisional rule, to be confirmed: if a pair has openings of different types, record the most permeable one.</p>
+</main>
+</body>
+</html>
