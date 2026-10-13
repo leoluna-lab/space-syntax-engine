@@ -2,6 +2,9 @@
 const DICT = {
   pt: {
     'brand.sub': 'Configuração convexa · Hillier & Hanson',
+    'edge.kind': 'Categoria da interface', 'edge.kindHelp': 'O que cada categoria significa',
+    'face.N': 'Norte', 'face.S': 'Sul', 'face.L': 'Leste', 'face.O': 'Oeste',
+    'toast.faceTaken': 'Esse espaço já tem uma ligação com o exterior na face {face}.',
     'grp.mode': 'Modo de trabalho', 'mode.simple': 'Simples', 'mode.research': 'Pesquisa',
     'hint.mode': 'Simples: o grafo de permeabilidade de sempre (ligação = passagem). Pesquisa: tipos de interface (opaco, vista, acesso, aberto), camadas de análise e faces N/S/L/O. Os dados ficam guardados nos dois modos.',
     'toast.researchHidden': 'Este modelo tem dados de pesquisa (tipos de interface, faces) que o modo Simples não mostra. Nada foi perdido.',
@@ -102,6 +105,9 @@ const DICT = {
   },
   en: {
     'brand.sub': 'Convex configuration · Hillier & Hanson',
+    'edge.kind': 'Interface category', 'edge.kindHelp': 'What each category means',
+    'face.N': 'North', 'face.S': 'South', 'face.L': 'East', 'face.O': 'West',
+    'toast.faceTaken': 'This space already has a link with the exterior on face {face}.',
     'grp.mode': 'Working mode', 'mode.simple': 'Simple', 'mode.research': 'Research',
     'hint.mode': 'Simple: the usual permeability graph (link = passage). Research: interface types (opaque, view, access, open), analysis layers and N/S/E/W faces. Data is kept in both modes.',
     'toast.researchHidden': 'This model has research data (interface types, faces) that Simple mode does not show. Nothing was lost.',

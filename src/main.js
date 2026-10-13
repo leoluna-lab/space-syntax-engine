@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, layerInput, layerKinds, orientation, FACES, LAYERS, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, LAYERS, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -50,6 +50,27 @@ const findEdge = key => model.edges.find(e => edgeKey(e) === key);
 // Modo Simples (padrão) = o grafo de permeabilidade de sempre: só a camada acesso, sem tipos, faces nem camadas na tela.
 // Modo Pesquisa = interfaces tipadas, camadas e orientação NSLO. Os dados são os mesmos; muda o que se vê e se analisa.
 let researchMode = false;
+let linkKind = 'acesso'; // categoria das ligações criadas no modo Ligar (Pesquisa)
+/**
+ * Traço de cada categoria no modo Pesquisa: cor E padrão distintos (daltonismo, impressão P&B).
+ * opaco = pontilhado cinza · vista = tracejado azul · acesso = contínuo · aberto = linha dupla espessa.
+ */
+const KIND_STYLE = {
+  opaco: { stroke: '#8c8679', width: 1.6, dash: '1 4', cap: 'round' },
+  vista: { stroke: '#2f5d8a', width: 1.8, dash: '7 4' },
+  acesso: { stroke: '#2a2824', width: 2 },
+  aberto: { stroke: '#2a2824', width: 6, inner: '#faf8f2', innerWidth: 2.2 },
+};
+/** Linha(s) SVG de uma categoria entre dois pontos (usada no mapa, na legenda e nos botões). */
+function kindLines(kind, x1, y1, x2, y2, opacity = 1, extraClass = '') {
+  const s = KIND_STYLE[kind], out = [];
+  const base = { x1, y1, x2, y2, stroke: s.stroke, 'stroke-width': s.width, 'stroke-opacity': opacity, 'stroke-linecap': s.cap || 'butt', class: ('edge-r ' + extraClass).trim() };
+  if (s.dash) base['stroke-dasharray'] = s.dash;
+  out.push(Eo('line', base));
+  if (s.inner) out.push(Eo('line', { x1, y1, x2, y2, stroke: s.inner, 'stroke-width': s.innerWidth, 'stroke-opacity': opacity, class: 'edge-inner' }));
+  return out;
+}
+const kindSwatch = k => `<svg class="kindsw" viewBox="0 0 44 12" aria-hidden="true">${kindLines(k, 3, 6, 41, 6).map(el => el.outerHTML).join('')}</svg>`;
 let layer = 'acesso', doorIsVisual = true;
 const effLayer = () => (researchMode ? layer : 'acesso');
 const layerOpts = () => ({ doorIsVisual });
@@ -298,14 +319,17 @@ function renderGraph() {
   });
   model.edges.forEach(e => {
     if (!researchMode && !inLayer(e)) return;
-    const pa = byId.get(e.a), pb = byId.get(e.b), key = edgeKey(e), perm = inLayer(e);
-    // ligações fora da camada analisada ficam pontilhadas e claras (não entram no cálculo)
-    const ln = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': perm ? 1.6 : 1.2, 'stroke-opacity': perm ? 0.55 : 0.35, 'stroke-dasharray': perm ? '' : '2 4', class: 'edge' + (selEdge === key ? ' seledge' : '') });
+    const pa = byId.get(e.a), pb = byId.get(e.b), key = edgeKey(e), sel = selEdge === key;
+    // Simples: o traço de sempre. Pesquisa: traço da categoria; fora da camada analisada fica claro.
+    const lines = researchMode
+      ? kindLines(e.kind, pa.x, pa.y, pb.x, pb.y, inLayer(e) ? 0.85 : 0.3, sel ? 'seledge' : '')
+      : [Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': 1.6, 'stroke-opacity': 0.55, class: 'edge' + (sel ? ' seledge' : '') })];
     const hit = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: 'transparent', 'stroke-width': 12, class: 'edgehit' });
     hit.dataset.key = key;
-    svgG.appendChild(ln); svgG.appendChild(hit);
-    edgeEls.push({ a: e.a, b: e.b, ln, hit });
+    lines.forEach(l => svgG.appendChild(l)); svgG.appendChild(hit);
+    edgeEls.push({ a: e.a, b: e.b, ln: lines[0], extra: lines.slice(1), hit });
   });
+  renderKindLegend();
   const m = meta(currentMeasure);
   model.nodes.forEach(n => {
     const p = R.per[n.id], col = colourOf(n.id), rad = nodeRadius(n.id);
@@ -338,7 +362,7 @@ function updatePositions() {
   });
   edgeEls.forEach(ed => {
     const a = byId.get(ed.a), b = byId.get(ed.b);
-    for (const el of [ed.ln, ed.hit]) { el.setAttribute('x1', a.x); el.setAttribute('y1', a.y); el.setAttribute('x2', b.x); el.setAttribute('y2', b.y); }
+    for (const el of [ed.ln, ...(ed.extra || []), ed.hit]) { el.setAttribute('x1', a.x); el.setAttribute('y1', a.y); el.setAttribute('x2', b.x); el.setAttribute('y2', b.y); }
   });
 }
 function clearGuides() { guides.forEach(g => g.remove()); guides = []; }
@@ -545,7 +569,23 @@ function addEdge(a, b) {
   if (!a || !b || a === b) return;
   const existing = model.edges.find(e => edgeKey(e) === edgeKey({ a, b }));
   if (existing) { toast(!researchMode && !inLayer(existing) ? t('toast.linkHidden', { kind: t('kind.' + existing.kind) }) : t('toast.linkExists')); return; }
-  mutate(() => model.edges.push({ a, b, kind: 'acesso' }));
+  mutate(() => model.edges.push({ a, b, kind: researchMode ? linkKind : 'acesso' }));
+}
+/** Muda a categoria da ligação (modo Pesquisa). */
+function setEdgeKind(key, kind) {
+  const e = findEdge(key);
+  if (!e || e.kind === kind || !EDGE_KINDS.includes(kind)) return;
+  mutate(() => { e.kind = kind; });
+}
+/** Muda a face de uma ligação com o exterior; respeita "uma por par e por face". */
+function setEdgeFace(key, face) {
+  const e = findEdge(key);
+  if (!e) return;
+  const next = face ? { ...e, face } : { a: e.a, b: e.b, kind: e.kind };
+  const nk = edgeKey(next);
+  if (nk !== key && findEdge(nk)) { toast(t('toast.faceTaken', { face })); renderSheet(); return; }
+  mutate(() => { if (face) e.face = face; else delete e.face; });
+  selEdge = nk; sheetFor = { kind: 'edge', key: nk }; renderGraph(); renderSheet();
 }
 function removeEdge(key) {
   mutate(() => { model.edges = model.edges.filter(e => edgeKey(e) !== key); });
@@ -656,7 +696,9 @@ function setMode(m) {
 function renderCtx() {
   let html = '';
   if (mode === 'add') html = `<span>${t('ctx.add')}</span>`;
-  else if (mode === 'link') html = `<span>${linkFrom ? t('ctx.link2', { id: esc(linkFrom) }) : t('ctx.link1')}</span>` + (linkFrom ? `<button data-ctx="cancelLink">${t('btn.cancel')}</button>` : '');
+  else if (mode === 'link') html = `<span>${linkFrom ? t('ctx.link2', { id: esc(linkFrom) }) : t('ctx.link1')}</span>` +
+    (researchMode ? `<div class="kindpick inbar" role="radiogroup" aria-label="${esc(t('edge.kind'))}">${EDGE_KINDS.map(k => `<button data-ctx="linkKind" data-k="${k}" role="radio" aria-checked="${k === linkKind}" title="${esc(t('kind.' + k))}">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}</div>` : '') +
+    (linkFrom ? `<button data-ctx="cancelLink">${t('btn.cancel')}</button>` : '');
   else if (mode === 'poly') {
     const n = poly.pts.length;
     html = `<span>${t('ctx.poly')}</span><button data-ctx="undoPt" ${n ? '' : 'disabled'}>${t('btn.undoPt')}</button>` +
@@ -678,6 +720,7 @@ $('ctxBar').addEventListener('click', e => {
   if (!b) return;
   switch (b.dataset.ctx) {
     case 'cancelLink': cancelLink(); break;
+    case 'linkKind': linkKind = b.dataset.k; renderCtx(); break;
     case 'undoPt': poly.pts.pop(); drawPolyPreview(); renderCtx(); break;
     case 'closePoly': finishPoly(); break;
     case 'cancelPoly': cancelPoly(); break;
@@ -712,6 +755,25 @@ function keepAboveSheet(id) {
   panBy(0, (top + bottom) / 2 - sy);
 }
 function closeSheet() { if (!sheetFor) return; sheetFor = null; renderSheet(); if (selEdge) { selEdge = null; renderGraph(); } }
+/** Editor da ligação no modo Pesquisa: categoria (4 botões) e, com o exterior, a face. */
+function edgeEditor(e) {
+  const ext = model.nodes.find(n => n.exterior);
+  const touchesExt = ext && (e.a === ext.id || e.b === ext.id);
+  return `<div class="kindpick" role="radiogroup" aria-label="${esc(t('edge.kind'))}">
+      ${EDGE_KINDS.map((k, i) => `<button data-act="setKind" data-k="${k}" role="radio" aria-checked="${e.kind === k}" title="${esc(t('kind.' + k))} (${i + 1})">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}
+    </div>
+    <button class="linkish" data-info="layer">${esc(t('edge.kindHelp'))} ⓘ</button>
+    ${touchesExt ? `<label class="labelrow"><span>${esc(t('edge.face'))}</span><select id="edgeFace">
+      <option value="">—</option>${FACES.map(f => `<option value="${f}" ${e.face === f ? 'selected' : ''}>${f} · ${esc(t('face.' + f))}</option>`).join('')}
+    </select></label>` : ''}`;
+}
+/** Legenda das categorias sob o mapa (modo Pesquisa). */
+function renderKindLegend() {
+  const el = $('kindLegend');
+  if (!el) return;
+  el.innerHTML = researchMode ? EDGE_KINDS.map(k => `<button class="kl" data-info="layer">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('') : '';
+}
+$('kindLegend').addEventListener('click', e => { if (e.target.closest('[data-info]')) openInfo('layer'); });
 function renderSheet() {
   const s = $('sheet');
   if (sheetFor && sheetFor.kind === 'node' && !byId.has(sheetFor.id)) sheetFor = null;
@@ -723,6 +785,7 @@ function renderSheet() {
     s.innerHTML = `<div class="sheet-handle"></div>
       <div class="sheet-head"><h3>${esc(t('edge.title'))}: ${esc(e.a)} ↔ ${esc(e.b)}</h3>${closeBtn}</div>
       <p class="hint">${esc(na.name)} ↔ ${esc(nb.name)} · ${esc(t('kind.' + e.kind))}${e.face ? ' · ' + esc(t('edge.face')) + ' ' + e.face : ''}</p>
+      ${researchMode ? edgeEditor(e) : ''}
       <div class="sheet-actions"><button class="danger" data-act="removeLink"><svg class="ico"><use href="#i-trash"/></svg>${esc(t('act.removeLink'))}</button></div>`;
   } else {
     const n = byId.get(sheetFor.id), p = R.per[n.id], isRoot = n.id === model.root;
@@ -759,9 +822,11 @@ $('sheet').addEventListener('click', e => {
     case 'link': setView('graph'); setMode('link'); linkFrom = target.id; closeSheet(); refreshSel(); break;
     case 'delete': armConfirm(b, () => deleteNodes([target.id])); break;
     case 'removeLink': removeEdge(target.key); break;
+    case 'setKind': setEdgeKind(target.key, b.dataset.k); break;
   }
 });
 $('sheet').addEventListener('change', e => {
+  if (e.target.id === 'edgeFace' && sheetFor && sheetFor.kind === 'edge') { setEdgeFace(sheetFor.key, e.target.value); return; }
   if (e.target.id === 'sheetLabel' && sheetFor) {
     const lab = e.target.value.trim().slice(0, 60), n = byId.get(sheetFor.id);
     if (n && lab !== (n.label || '')) mutate(() => { if (lab) n.label = lab; else delete n.label; });
@@ -1415,6 +1480,7 @@ document.addEventListener('keydown', e => {
     else if (selEdge) { e.preventDefault(); removeEdge(selEdge); }
     return;
   }
+  if (researchMode && selEdge && /^[1-4]$/.test(k)) { setEdgeKind(selEdge, EDGE_KINDS[+k - 1]); return; }
   if (k === 'n') addNodeAt(lastMouse.x, lastMouse.y);
   if (k === 'l' && selSet.size === 2) { const [a, b] = [...selSet]; addEdge(a, b); }
   if (k === 'r' && selSet.size === 1) setRoot([...selSet][0]);
