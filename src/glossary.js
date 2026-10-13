@@ -151,6 +151,13 @@ export const GLOSSARY = {
       read: '',
       ref: '',
     },
+    genotype: {
+      title: 'Ordem das funções (genótipo)',
+      def: 'Ordena as funções (rótulos) pela integração média dos seus espaços. Quando a mesma ordem se repete em várias casas de uma cultura, ela é um "genótipo": um padrão social inscrito no espaço, por trás das variações de forma (fenótipos).',
+      formula: 'Integração média por função; ">" = mais integrado; "=" = empate · H* entre funções sobre o RA médio de cada uma',
+      read: 'Compare a ordem entre cenários: se a sala de estar é mais integrada que a cozinha em todas as plantas, há um padrão estável. Rotule só espaços equivalentes; espaços sem função ficam de fora. Usa sempre valores globais.',
+      ref: 'Hillier, Hanson & Graham 1987; Hanson 1998 (Decoding Homes and Houses)',
+    },
     radius: {
       title: 'Raio',
       def: 'Limita integração, choice e entropia aos espaços até n passos.',
@@ -306,6 +313,13 @@ export const GLOSSARY = {
       formula: '',
       read: '',
       ref: '',
+    },
+    genotype: {
+      title: 'Function order (genotype)',
+      def: 'Ranks functions (labels) by the mean integration of their spaces. When the same order recurs across many houses of a culture it is a "genotype": a social pattern inscribed in space, beneath variations of form (phenotypes).',
+      formula: 'Mean integration per function; ">" = more integrated; "=" = tie · H* across functions on the mean RA of each',
+      read: 'Compare the order across scenarios: if the living room is more integrated than the kitchen in every plan, there is a stable pattern. Only label equivalent spaces; unlabelled spaces are left out. Always uses global values.',
+      ref: 'Hillier, Hanson & Graham 1987; Hanson 1998 (Decoding Homes and Houses)',
     },
     radius: {
       title: 'Radius',

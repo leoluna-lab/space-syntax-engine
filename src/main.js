@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -22,7 +22,9 @@ const VALIDATED = {
 };
 
 /* ---------------- ESTADO ---------------- */
-let model = migrateModel(VALIDATED), R = null, modelB = null;
+let project = migrateProject(migrateModel(VALIDATED), t('scn.default', { n: 1 }));
+let model = project.scenarios[0].model, R = null;
+let cmpView = 'maps', cmpSel = null, cmpRef = null, cmpOther = null; // comparação: visão, cenários incluídos (null = todos), par do Δ
 let byId = new Map();
 let conv = { entropy: DEFAULT_OPTIONS.entropy, differenceFactor: DEFAULT_OPTIONS.differenceFactor };
 let currentMeasure = 'integ', showValues = false, snap = false, radius = 0, projector = false;
@@ -35,7 +37,8 @@ const poly = { pts: [], cursor: null };
 let cam = { x: 0, y: 0, w: W0, h: H0 };
 let sortKey = 'integ', sortDir = -1;
 let lastMouse = { x: W0 / 2, y: H0 / 2 }, lastPointerType = 'mouse';
-const hist = { past: [], future: [] };
+let hist = { past: [], future: [] };
+const histBy = new Map(); // histórico de desfazer por cenário
 
 const svgG = $('svgGraph'), svgJ = $('svgJ'), tip = $('tip');
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -43,20 +46,23 @@ const snapV = v => (snap ? Math.round(v / gridSize) * gridSize : Math.round(v * 
 const sameEdge = (e, a, b) => (e[0] === a && e[1] === b) || (e[0] === b && e[1] === a);
 
 function analyse(m) { return runAnalysis(m, { ...conv, radius }); }
+const activeScenario = () => project.scenarios.find(s => s.id === project.activeId);
+function setModel(m) { model = m; activeScenario().model = m; }
 
 /* ---------------- HISTÓRICO ---------------- */
 const snapshot = () => JSON.stringify(model);
 function commit(pre) { hist.past.push(pre); if (hist.past.length > 80) hist.past.shift(); hist.future = []; }
 function mutate(fn) { const pre = snapshot(); fn(); commit(pre); recompute(); }
-function restore(json) { model = migrateModel(JSON.parse(json)); }
+function restore(json) { setModel(migrateModel(JSON.parse(json))); }
 function undo() { if (!hist.past.length) return; hist.future.push(snapshot()); restore(hist.past.pop()); recompute(); }
 function redo() { if (!hist.future.length) return; hist.past.push(snapshot()); restore(hist.future.pop()); recompute(); }
 
 /* ---------------- PERSISTÊNCIA ---------------- */
 function autosave() {
   try {
+    localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      model, currentMeasure, showValues, snap, radius, conv, projector,
+      currentMeasure, showValues, snap, radius, conv, projector,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -72,15 +78,18 @@ function loadSaved() {
     const s = localStorage.getItem('ssx_state');
     if (s) {
       const o = JSON.parse(s);
-      if (o.model) model = migrateModel(o.model);
+      if (o.model) project = migrateProject(o.model, t('scn.default', { n: 1 })); // estado salvo antes dos cenários
       currentMeasure = o.currentMeasure || 'integ';
       showValues = !!o.showValues; snap = !!o.snap; radius = o.radius || 0; projector = !!o.projector;
       if (o.conv) conv = Object.assign(conv, o.conv);
       if (o.bg) bg = Object.assign(bg, o.bg);
     }
+    const pj = localStorage.getItem('ssx_project');
+    if (pj) project = migrateProject(JSON.parse(pj));
     const bi = localStorage.getItem('ssx_bg');
     if (bi) bg.img = bi;
   } catch (_) { /* estado corrompido: começa do modelo validado */ }
+  model = activeScenario().model;
 }
 
 /* ---------------- MEDIDAS ---------------- */
@@ -135,7 +144,7 @@ function recompute() {
   autosave();
 }
 function renderAll() {
-  renderStatus(); renderPanel(); renderGraph(); renderJ(); renderResults();
+  renderStatus(); renderScenarios(); renderPanel(); renderGraph(); renderJ(); renderResults();
   if (view === 'compare') renderCompare();
   renderSheet(); renderCtx();
 }
@@ -173,6 +182,9 @@ function renderPanel() {
   ss.value = sortKey;
   $('optSnap').checked = snap; $('optValues').checked = showValues; $('optRadius').value = radius;
   $('optEntropy').value = conv.entropy; $('optHFactor').value = conv.differenceFactor;
+  const labs = new Set(t('label.presets').split('|'));
+  project.scenarios.forEach(sc => sc.model.nodes.forEach(n => { if (n.label) labs.add(n.label); }));
+  $('labelOptions').innerHTML = [...labs].map(l => `<option value="${esc(l)}"></option>`).join('');
 }
 function fillSel(sel, val) {
   const keep = sel.value;
@@ -204,13 +216,13 @@ function placeCam(wx, wy, cx, cy, w) {
 function zoomAt(cx, cy, f) { const p = clientToWorld(cx, cy); placeCam(p.x, p.y, cx, cy, cam.w * f); }
 function zoomCenter(f) { const r = svgG.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, f); }
 function panBy(dx, dy) { const k = pxPerUnit(); cam = { ...cam, x: cam.x - dx / k, y: cam.y - dy / k }; applyCam(); }
-function contentBounds(aspect = viewAspect(), pad = 30) {
+function contentBounds(aspect = viewAspect(), pad = 30, m = model, withBg = true, top = 40) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
-  model.nodes.forEach(n => { add(n.x - 30, n.y - 30); add(n.x + 30, n.y + 40); (n.poly || []).forEach(p => add(p[0], p[1])); });
-  if (bg.img) { add(0, 0); add(W0, H0); }
+  m.nodes.forEach(n => { add(n.x - 30, n.y - 30); add(n.x + 30, n.y + 40); (n.poly || []).forEach(p => add(p[0], p[1])); });
+  if (withBg && bg.img) { add(0, 0); add(W0, H0); }
   if (!isFinite(x0)) { add(0, 0); add(W0, H0); }
-  x0 -= pad; y0 -= pad + 40; x1 += pad; y1 += pad; // +40: espaço para a barra de modos
+  x0 -= pad; y0 -= pad + top; x1 += pad; y1 += pad; // top: espaço para a barra de modos
   let w = x1 - x0, h = y1 - y0;
   if (w < 300) { x0 -= (300 - w) / 2; w = 300; }
   if (w / h < aspect) { const nw = h * aspect; x0 -= (nw - w) / 2; w = nw; } else { const nh = w / aspect; y0 -= (nh - h) / 2; h = nh; }
@@ -685,6 +697,7 @@ function renderSheet() {
       </div>
       <div class="sheet-type">${isRoot ? `<span class="badge">${esc(t('root.badge'))}</span>` : ''}
         <button class="linkish" data-info="type">${esc(t('type'))} <b>${p.type}</b> — ${esc(t('type.' + p.type))}</button></div>
+      <label class="labelrow"><span>${esc(t('label'))}</span><input type="text" id="sheetLabel" list="labelOptions" value="${esc(n.label || '')}" maxlength="60" placeholder="${esc(t('label.ph'))}" autocomplete="off"></label>
       <div class="mgrid">${rows}</div>
       ${narrow.matches ? `<button class="linkish more" data-act="more" aria-expanded="${sheetExpanded}">${esc(t(sheetExpanded ? 'sheet.less' : 'sheet.more'))}</button>` : ''}
       <div class="sheet-actions">
@@ -711,11 +724,16 @@ $('sheet').addEventListener('click', e => {
   }
 });
 $('sheet').addEventListener('change', e => {
+  if (e.target.id === 'sheetLabel' && sheetFor) {
+    const lab = e.target.value.trim().slice(0, 60), n = byId.get(sheetFor.id);
+    if (n && lab !== (n.label || '')) mutate(() => { if (lab) n.label = lab; else delete n.label; });
+    return;
+  }
   if (e.target.id !== 'sheetName' || !sheetFor) return;
   const name = e.target.value.trim(), n = byId.get(sheetFor.id);
   if (name && n && name !== n.name) mutate(() => { n.name = name.slice(0, 200); });
 });
-$('sheet').addEventListener('keydown', e => { if (e.target.id === 'sheetName' && e.key === 'Enter') e.target.blur(); });
+$('sheet').addEventListener('keydown', e => { if ((e.target.id === 'sheetName' || e.target.id === 'sheetLabel') && e.key === 'Enter') e.target.blur(); });
 
 /* ---------------- AVISOS, CONFIRMAÇÃO, GLOSSÁRIO ---------------- */
 let toastTimer = null;
@@ -756,55 +774,58 @@ $('infoDlg').addEventListener('click', e => {
 });
 
 /* ---------------- GRAFO JUSTIFICADO ---------------- */
-function renderJ() {
-  svgJ.innerHTML = '';
+/** Desenha o grafo justificado de `m` (resultado `Rx`) em `svg`. Usado na aba J-graph e na comparação. */
+function drawJGraph(svg, m, Rx, sel = new Set()) {
+  svg.innerHTML = '';
   const W = W0, Hh = H0, padB = 56, padT = 40;
   const layers = {}; let maxD = 0, hasNull = false;
-  model.nodes.forEach(n => {
-    const d = R.per[n.id].depth;
+  m.nodes.forEach(n => {
+    const d = Rx.per[n.id].depth;
     if (d == null) { hasNull = true; return; }
     (layers[d] = layers[d] || []).push(n.id); maxD = Math.max(maxD, d);
   });
   const rows = maxD + (hasNull ? 2 : 1), yFor = d => Hh - padB - d * ((Hh - padB - padT) / Math.max(1, rows - 1));
   const pj = {};
   for (let d = 0; d <= maxD; d++) { const arr = layers[d] || []; arr.forEach((id, i) => { pj[id] = { x: W / (arr.length + 1) * (i + 1), y: yFor(d) }; }); }
-  if (hasNull) { const arr = model.nodes.filter(n => R.per[n.id].depth == null).map(n => n.id); arr.forEach((id, i) => { pj[id] = { x: W / (arr.length + 1) * (i + 1), y: padT - 16 }; }); }
+  if (hasNull) { const arr = m.nodes.filter(n => Rx.per[n.id].depth == null).map(n => n.id); arr.forEach((id, i) => { pj[id] = { x: W / (arr.length + 1) * (i + 1), y: padT - 16 }; }); }
   for (let d = 0; d <= maxD; d++) {
-    svgJ.appendChild(Eo('line', { x1: 40, y1: yFor(d), x2: W - 14, y2: yFor(d), stroke: C.rule, 'stroke-width': 1, 'stroke-dasharray': '2 4' }));
-    const lb = txt(18, yFor(d) + 4, 'd' + d, 11, C.muted, null, 't-name'); svgJ.appendChild(lb);
+    svg.appendChild(Eo('line', { x1: 40, y1: yFor(d), x2: W - 14, y2: yFor(d), stroke: C.rule, 'stroke-width': 1, 'stroke-dasharray': '2 4' }));
+    svg.appendChild(txt(18, yFor(d) + 4, 'd' + d, 11, C.muted, null, 't-name'));
   }
   // arestas da árvore de busca em largura a partir da raiz; as demais (anéis) tracejadas
-  const adj = new Map(model.nodes.map(n => [n.id, []]));
-  model.edges.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
+  const adj = new Map(m.nodes.map(n => [n.id, []]));
+  m.edges.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
+  const key = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
   const tree = new Set();
-  if (model.root) {
-    const seen = new Set([model.root]), q = [model.root];
-    for (let h = 0; h < q.length; h++) for (const w of adj.get(q[h])) if (!seen.has(w)) { seen.add(w); tree.add(q[h] < w ? q[h] + '\u0000' + w : w + '\u0000' + q[h]); q.push(w); }
+  if (m.root && adj.has(m.root)) {
+    const seen = new Set([m.root]), q = [m.root];
+    for (let h = 0; h < q.length; h++) for (const w of adj.get(q[h])) if (!seen.has(w)) { seen.add(w); tree.add(key(q[h], w)); q.push(w); }
   }
-  model.edges.forEach(([a, b]) => {
+  m.edges.forEach(([a, b]) => {
     if (!pj[a] || !pj[b]) return;
-    const isTree = tree.has(a < b ? a + '\u0000' + b : b + '\u0000' + a);
-    svgJ.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: isTree ? C.wall : C.accent, 'stroke-width': isTree ? 1.8 : 1.2, 'stroke-dasharray': isTree ? '' : '5 3', 'stroke-opacity': isTree ? 0.9 : 0.7 }));
+    const isTree = tree.has(key(a, b));
+    svg.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: isTree ? C.wall : C.accent, 'stroke-width': isTree ? 1.8 : 1.2, 'stroke-dasharray': isTree ? '' : '5 3', 'stroke-opacity': isTree ? 0.9 : 0.7 }));
   });
   const ramp = ['#e9dcc6', '#dcae82', '#cc7f52', '#b25334', '#8a2d1f', '#6a2016', '#4d170f'];
-  model.nodes.forEach(n => {
+  m.nodes.forEach(n => {
     const p = pj[n.id];
     if (!p) return;
-    const d = R.per[n.id].depth, col = d == null ? '#bdb6a6' : ramp[Math.min(d, ramp.length - 1)];
-    const g = Eo('g', { class: 'node' + (selSet.has(n.id) ? ' selnode' : ''), transform: `translate(${p.x},${p.y})` });
+    const d = Rx.per[n.id].depth, col = d == null ? '#bdb6a6' : ramp[Math.min(d, ramp.length - 1)];
+    const g = Eo('g', { class: 'node' + (sel.has(n.id) ? ' selnode' : ''), transform: `translate(${p.x},${p.y})` });
     g.dataset.id = n.id;
     g.appendChild(Eo('circle', { r: 24, fill: 'transparent', class: 'hit' }));
     g.appendChild(Eo('circle', { class: 'halo', r: 21, fill: 'none', stroke: C.accent, 'stroke-width': 2.5 }));
-    if (n.id === model.root) {
+    if (n.id === m.root) {
       g.appendChild(Eo('circle', { r: 16, fill: col, stroke: C.accent, 'stroke-width': 2.4 }));
       g.appendChild(Eo('line', { x1: -16, y1: 0, x2: 16, y2: 0, stroke: C.accent, 'stroke-width': 1.3 }));
       g.appendChild(Eo('line', { x1: 0, y1: -16, x2: 0, y2: 16, stroke: C.accent, 'stroke-width': 1.3 }));
     } else g.appendChild(Eo('circle', { r: 14, fill: col, stroke: C.wall, 'stroke-width': 1.4 }));
     g.appendChild(txt(0, 4.5, n.id, 12, d != null && d >= 2 ? '#fff' : C.ink, '700', 't-id'));
     if (showValues && d != null) g.appendChild(txt(0, -20, 'd' + d, 10, C.ink2, '700', 't-val'));
-    svgJ.appendChild(g);
+    svg.appendChild(g);
   });
 }
+function renderJ() { drawJGraph(svgJ, model, R, selSet); }
 svgJ.addEventListener('click', e => {
   const g = e.target.closest('.node');
   if (!g) { clearSelection(); renderJ(); return; }
@@ -815,10 +836,11 @@ svgJ.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') hover
 svgJ.addEventListener('pointerleave', hideTip);
 
 /* ---------------- RESULTADOS ---------------- */
-const COLS = ['id', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
-const colLabelLong = k => (k === 'id' || k === 'type' ? t('col.' + k) : t('m.' + k));
+const COLS = ['id', 'label', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+const isTextKey = k => k === 'id' || k === 'type' || k === 'label';
+const colLabelLong = k => (isTextKey(k) ? t('col.' + k) : t('m.' + k));
 function sortedNodes() {
-  const key = n => (sortKey === 'id' ? n.id : sortKey === 'type' ? R.per[n.id].type : R.per[n.id][sortKey]);
+  const key = n => (sortKey === 'id' ? n.id : sortKey === 'label' ? (n.label || '\uffff').toLowerCase() : sortKey === 'type' ? R.per[n.id].type : R.per[n.id][sortKey]);
   return [...model.nodes].sort((a, b) => {
     let va = key(a), vb = key(b);
     if (va == null) va = -Infinity;
@@ -849,25 +871,26 @@ function renderResults() {
   $('globalCards').innerHTML = cards.map(([k, v, info]) =>
     `<button class="card" data-info="${info}"><div class="k">${esc(t(k, { basis: t(conv.differenceFactor === 'ra' ? 'basis.ra' : 'basis.integ') }))}</div><div class="v">${esc(v)}</div></button>`).join('');
   $('resTable').querySelector('thead').innerHTML = '<tr>' + COLS.map(k =>
-    `<th class="${k === 'id' || k === 'type' ? 'name' : ''}" data-k="${k}" ${k === sortKey ? `aria-sort="${sortDir > 0 ? 'ascending' : 'descending'}"` : ''} title="${esc(colLabelLong(k))}">${esc(t('col.' + k))}</th>`).join('') + '</tr>';
+    `<th class="${isTextKey(k) ? 'name' : ''}" data-k="${k}" ${k === sortKey ? `aria-sort="${sortDir > 0 ? 'ascending' : 'descending'}"` : ''} title="${esc(colLabelLong(k))}">${esc(t('col.' + k))}</th>`).join('') + '</tr>';
   const rows = sortedNodes();
   $('resTable').querySelector('tbody').innerHTML = rows.map(n => {
     const p = R.per[n.id];
     return `<tr data-id="${esc(n.id)}" class="${n.id === model.root ? 'root' : ''}${selSet.has(n.id) ? ' sel' : ''}">
-      <td class="name"><span class="chip" style="background:${colourOf(n.id)}"></span> ${esc(n.id)} · ${esc(n.name)}</td><td class="name">${p.type}</td>
+      <td class="name"><span class="chip" style="background:${colourOf(n.id)}"></span> ${esc(n.id)} · ${esc(n.name)}</td><td class="name">${esc(n.label || '—')}</td><td class="name">${p.type}</td>
       <td>${p.conn}</td><td>${fmt3(p.ctrl)}</td><td>${fmt3(p.controllability)}</td><td>${fmt1(p.choice)}</td><td>${fmtInt(p.depth)}</td>
       <td>${p.td}</td><td>${fmt3(p.md)}</td><td>${fmt3(p.ra)}</td><td>${fmt3(p.rra)}</td><td><b>${fmt3(p.integ)}</b></td><td>${fmt3(p.ent)}</td></tr>`;
   }).join('');
-  const showKey = sortKey === 'id' || sortKey === 'type' ? currentMeasure : sortKey;
+  const showKey = isTextKey(sortKey) ? currentMeasure : sortKey;
   $('spaceCards').innerHTML = rows.map(n => {
     const p = R.per[n.id], v = showKey === 'focus' ? valOf(n.id, 'focus') : p[showKey];
     return `<button class="scard${selSet.has(n.id) ? ' sel' : ''}" data-id="${esc(n.id)}">
       <span class="chip" style="background:${colourOf(n.id)}"></span>
       <span class="nm">${esc(n.id)} · ${esc(n.name)}</span>
       <span class="big">${(FMT[showKey] || fmt3)(v)}</span>
-      <span class="sub">${esc(t('type'))} ${p.type} · ${esc(t('col.integ'))} ${fmt3(p.integ)} · ${esc(t('col.choice'))} ${fmt1(p.choice)} · ${esc(t('col.depth'))} ${fmtInt(p.depth)}</span>
+      <span class="sub">${n.label ? esc(n.label) + ' · ' : ''}${esc(t('type'))} ${p.type} · ${esc(t('col.integ'))} ${fmt3(p.integ)} · ${esc(t('col.choice'))} ${fmt1(p.choice)} · ${esc(t('col.depth'))} ${fmtInt(p.depth)}</span>
     </button>`;
   }).join('');
+  renderFunctional();
   $('methodFoot').innerHTML = t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
     t(conv.differenceFactor === 'ra' ? 'method.h.ra' : 'method.h.int') + t('method.tail');
 }
@@ -875,7 +898,7 @@ $('resTable').querySelector('thead').addEventListener('click', e => {
   const th = e.target.closest('th[data-k]');
   if (!th) return;
   const k = th.dataset.k;
-  if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = k === 'id' || k === 'type' ? 1 : -1; }
+  if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = isTextKey(k) ? 1 : -1; }
   renderResults(); $('sortSel').value = sortKey;
 });
 function pickFromResults(e) {
@@ -886,34 +909,251 @@ function pickFromResults(e) {
 }
 $('resTable').querySelector('tbody').addEventListener('click', pickFromResults);
 $('spaceCards').addEventListener('click', pickFromResults);
+/** Resultado global (raio 0) — o genótipo e o H* entre funções são propriedades da configuração inteira. */
+const globalOf = (m, Rx) => (radius === 0 ? Rx : runAnalysis(m, { ...conv, radius: 0 }));
+function renderFunctional() {
+  const box = $('funcBox');
+  const F = functionalSummary(model, globalOf(model, R));
+  const f3 = v => (v == null ? '—' : v.toFixed(3));
+  if (!F.stats.length) { box.innerHTML = `<h4>${esc(t('func.title'))}</h4><p class="hint" style="margin:0">${esc(t('func.none'))}</p>`; return; }
+  box.innerHTML = `<h4>${esc(t('func.title'))} <button class="linkish" data-info="genotype">ⓘ</button></h4>
+    <p class="ineq"><span class="k">${esc(t('func.ineq'))}</span> ${esc(F.inequality)}</p>
+    ${F.Hs != null ? `<p class="ineq"><span class="k">${esc(t('func.Hs'))}</span> ${f3(F.Hs)}</p>` : ''}
+    <div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.label'))}</th><th>${esc(t('func.n'))}</th><th>${esc(t('func.integ'))}</th><th>${esc(t('func.rra'))}</th><th>${esc(t('func.depth'))}</th></tr></thead><tbody>
+    ${F.stats.map(s => `<tr><td class="name">${esc(s.label)} <span class="mini">${esc(s.ids.join(', '))}</span></td><td>${s.ids.length}</td><td><b>${f3(s.meanInteg)}</b></td><td>${f3(s.meanRRA)}</td><td>${s.meanDepth == null ? '—' : s.meanDepth.toFixed(2)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+$('funcBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('globalCards').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
-$('sortSel').addEventListener('change', e => { sortKey = e.target.value; sortDir = sortKey === 'id' || sortKey === 'type' ? 1 : -1; renderResults(); });
+$('sortSel').addEventListener('change', e => { sortKey = e.target.value; sortDir = isTextKey(sortKey) ? 1 : -1; renderResults(); });
+
+/* ---------------- CENÁRIOS ---------------- */
+function renderScenarios() {
+  const sel = $('scnSel');
+  sel.innerHTML = project.scenarios.map(sc => `<option value="${esc(sc.id)}">${esc(sc.name)}</option>`).join('');
+  sel.value = project.activeId;
+  $('sCount').textContent = '(' + project.scenarios.length + ')';
+  const nm = $('scnName');
+  if (document.activeElement !== nm) nm.value = activeScenario().name;
+  const only = project.scenarios.length === 1;
+  $('scnList').innerHTML = project.scenarios.map(sc => `
+    <div class="li${sc.id === project.activeId ? ' isroot' : ''}">
+      <button class="nm" data-scn="${esc(sc.id)}">${esc(sc.name)}</button>
+      <span class="mini">${sc.model.nodes.length}e · ${sc.model.edges.length}l</span>
+      <button class="danger" data-scndel="${esc(sc.id)}" ${only ? 'disabled' : ''} aria-label="${esc(t('btn.delete'))}">×</button>
+    </div>`).join('');
+}
+function switchScenario(id) {
+  if (id === project.activeId || !project.scenarios.some(sc => sc.id === id)) return;
+  histBy.set(project.activeId, hist);
+  project.activeId = id;
+  hist = histBy.get(id) || { past: [], future: [] };
+  model = activeScenario().model;
+  selSet.clear(); selEdge = null; multi = false; linkFrom = null; poly.pts = []; sheetFor = null;
+  recompute(); fitView();
+}
+function addScenario(sc) {
+  if (project.scenarios.length >= MAX_SCENARIOS) { toast(t('toast.maxScn', { n: MAX_SCENARIOS })); return false; }
+  const i = project.scenarios.findIndex(x => x.id === project.activeId);
+  project.scenarios.splice(i + 1, 0, sc);
+  if (cmpSel) cmpSel.add(sc.id);
+  switchScenario(sc.id);
+  return true;
+}
+/** Duplicar = variação do mesmo projeto (mesma família): os espaços são comparados pelo id. */
+function duplicateScenario() {
+  const sc = activeScenario(), id = newScenarioId(project.scenarios.map(x => x.id));
+  const copy = { id, name: t('scn.copyOf', { name: sc.name }).slice(0, 80), family: sc.family, model: migrateModel(JSON.parse(JSON.stringify(sc.model))) };
+  if (addScenario(copy)) toast(t('toast.dup'));
+}
+/** Novo cenário em branco = outro projeto (família própria), começa só com o exterior. */
+function newScenario() {
+  const id = newScenarioId(project.scenarios.map(x => x.id));
+  const m = migrateModel({ nodes: [{ id: 'X', name: t('scn.exterior'), x: W0 / 2, y: H0 - 60, label: t('scn.exterior') }], edges: [], root: 'X' });
+  addScenario({ id, name: t('scn.default', { n: project.scenarios.length + 1 }), family: id, model: m });
+}
+function deleteScenario(id) {
+  if (project.scenarios.length < 2) return;
+  const i = project.scenarios.findIndex(sc => sc.id === id);
+  if (i < 0) return;
+  const wasActive = project.activeId === id;
+  const [removed] = project.scenarios.splice(i, 1);
+  const removedHist = wasActive ? hist : histBy.get(id);
+  if (cmpSel) cmpSel.delete(id);
+  if (wasActive) {
+    project.activeId = project.scenarios[Math.min(i, project.scenarios.length - 1)].id;
+    hist = histBy.get(project.activeId) || { past: [], future: [] };
+    model = activeScenario().model; selSet.clear(); sheetFor = null;
+    recompute(); fitView();
+  } else recompute();
+  toast(t('toast.scnDeleted', { name: removed.name }), t('toast.undo'), () => {
+    project.scenarios.splice(i, 0, removed);
+    if (removedHist) histBy.set(id, removedHist);
+    if (cmpSel) cmpSel.add(id);
+    recompute();
+  });
+}
+/** Importa cenários de outro projeto como novos (ids e famílias renomeados, sem sobrescrever nada). */
+function importScenarios(pr) {
+  const incoming = pr.scenarios.slice(0, MAX_SCENARIOS - project.scenarios.length);
+  if (!incoming.length) { toast(t('toast.maxScn', { n: MAX_SCENARIOS })); return; }
+  const used = project.scenarios.map(sc => sc.id), idMap = new Map(), famMap = new Map();
+  incoming.forEach(sc => { const id = newScenarioId(used); used.push(id); idMap.set(sc.id, id); });
+  incoming.forEach(sc => {
+    if (!famMap.has(sc.family)) famMap.set(sc.family, idMap.get(sc.family) || idMap.get(sc.id));
+    project.scenarios.push({ id: idMap.get(sc.id), name: sc.name, family: famMap.get(sc.family), model: sc.model });
+  });
+  toast(t('toast.imported', { n: incoming.length }));
+  switchScenario(idMap.get(incoming[0].id));
+}
 
 /* ---------------- COMPARAR ---------------- */
-function renderCompare() {
-  const box = $('compareBox');
-  if (!modelB) { box.innerHTML = `<div class="valbox">${esc(t('cmp.none'))}</div>`; return; }
-  const RB = analyse(modelB);
-  const idsB = new Set(RB.ids), idsA = new Set(R.ids);
-  const common = R.ids.filter(i => idsB.has(i));
-  const added = R.ids.filter(i => !idsB.has(i)), removed = RB.ids.filter(i => !idsA.has(i));
-  const f3 = v => (v == null ? '—' : v.toFixed(3));
-  const card = (k, v) => `<div class="card"><div class="k">${esc(t(k))}</div><div class="v">${esc(v)}</div></div>`;
-  let html = '<div class="cards">' + card('cmp.meanA', f3(R.meanInt)) + card('cmp.meanB', f3(RB.meanInt)) +
-    card('cmp.rings', `${R.circuit} / ${RB.circuit}`) + card('cmp.addrem', `${added.length} / ${removed.length}`) + '</div>';
-  html += `<div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.id'))}</th><th>${esc(t('cmp.integA'))}</th><th>${esc(t('cmp.integB'))}</th><th>${esc(t('cmp.dInteg'))}</th><th>${esc(t('cmp.choiceA'))}</th><th>${esc(t('cmp.choiceB'))}</th><th>${esc(t('cmp.dChoice'))}</th></tr></thead><tbody>`;
-  common.forEach(id => {
-    const a = R.per[id], b = RB.per[id];
-    const di = a.integ != null && b.integ != null ? a.integ - b.integ : null, dc = a.choice - b.choice;
-    const nm = byId.get(id).name;
-    html += `<tr><td class="name">${esc(id)} · ${esc(nm)}</td><td>${fmt3(a.integ)}</td><td>${fmt3(b.integ)}</td>
-      <td class="${di > 0 ? 'up' : di < 0 ? 'down' : ''}">${di == null ? '—' : (di > 0 ? '+' : '') + di.toFixed(3)}</td>
-      <td>${fmt1(a.choice)}</td><td>${fmt1(b.choice)}</td><td class="${dc > 0 ? 'up' : dc < 0 ? 'down' : ''}">${(dc > 0 ? '+' : '') + dc.toFixed(1)}</td></tr>`;
+const maxDepth = r => r.ids.reduce((m, id) => { const d = r.per[id].depth; return d != null && (m == null || d > m) ? d : m; }, null);
+const CMP_INDICATORS = [
+  ['card.k', r => r.k, 0, 'k'], ['card.L', r => r.L, 0, 'L'], ['card.rings', r => r.circuit, 0, 'rings'],
+  ['card.ringiness', r => r.ringiness, 3, 'ringiness'], ['card.meanConn', r => r.meanConn, 2, 'meanConn'],
+  ['card.meanInt', r => r.meanInt, 3, 'integ'], ['card.meanRRA', r => r.meanRRA, 3, 'rra'], ['card.meanMD', r => r.meanMD, 3, 'md'],
+  ['card.diameter', r => r.diameter, 0, 'diameter'], ['cmp.maxDepth', maxDepth, 0, 'depth'],
+  ['card.Hs', r => r.Hs, 3, 'Hs'], ['card.int', r => r.intelligibility, 3, 'intelligibility'],
+];
+const cmpKey = () => (currentMeasure === 'focus' ? 'integ' : currentMeasure);
+
+/** Mapa reduzido (não interativo) de um cenário; tamanhos compensados para ficarem legíveis. */
+function drawMiniMap(svg, m, Rx, colour) {
+  svg.innerHTML = '';
+  const b = contentBounds(4 / 3, 24, m, false, 0), k = b.w / 360;
+  svg.setAttribute('viewBox', `${b.x} ${b.y} ${b.w} ${b.h}`);
+  const pos = new Map(m.nodes.map(n => [n.id, n]));
+  m.nodes.forEach(n => {
+    if (!n.poly || n.poly.length < 3) return;
+    const c = colour(n.id);
+    svg.appendChild(Eo('polygon', { points: n.poly.map(p => p.join(',')).join(' '), fill: c, 'fill-opacity': 0.22, stroke: c, 'stroke-width': 1.2 * k }));
   });
-  html += '</tbody></table></div>';
-  if (added.length || removed.length) html += `<p class="foot">${esc(t('cmp.added', { a: added.join(', ') || '—', b: removed.join(', ') || '—' }))}</p>`;
+  m.edges.forEach(([a, b2]) => {
+    const A = pos.get(a), B = pos.get(b2);
+    svg.appendChild(Eo('line', { x1: A.x, y1: A.y, x2: B.x, y2: B.y, stroke: C.wall, 'stroke-width': 1.4 * k, 'stroke-opacity': 0.55 }));
+  });
+  m.nodes.forEach(n => {
+    const c = colour(n.id), r = (7 + Rx.per[n.id].conn) * k;
+    const g = Eo('g', { transform: `translate(${n.x},${n.y})` });
+    if (n.id === m.root) g.appendChild(Eo('circle', { r: r + 3.5 * k, fill: 'none', stroke: C.accent, 'stroke-width': 1.8 * k }));
+    g.appendChild(Eo('circle', { r, fill: c, stroke: '#fff', 'stroke-width': 1.5 * k }));
+    g.appendChild(txt(0, 3.8 * k, n.id, 10.5 * k, labelInk(c), '700', 't-id'));
+    svg.appendChild(g);
+  });
+}
+
+function renderCompare() {
+  const box = $('compareBox'), all = project.scenarios;
+  $('cmpViews').querySelectorAll('[data-cv]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.cv === cmpView)));
+  const cm = $('cmpMeasure');
+  cm.innerHTML = MEASURES.filter(x => x.key !== 'focus').map(x => `<option value="${x.key}">${esc(t('m.' + x.key))}</option>`).join('');
+  cm.value = cmpKey();
+  if (all.length < 2) {
+    $('cmpChips').innerHTML = '';
+    box.innerHTML = `<div class="valbox">${esc(t('cmp.need2'))}<div class="btnrow"><button data-cmd="dup">${esc(t('cmp.dupNow'))}</button><button class="ghost" data-cmd="new">${esc(t('scn.new'))}</button></div></div>`;
+    return;
+  }
+  $('cmpChips').innerHTML = all.map(sc => `<button class="chipbtn" data-chip="${esc(sc.id)}" aria-pressed="${!cmpSel || cmpSel.has(sc.id)}">${esc(sc.name)}</button>`).join('');
+  const scs = all.filter(sc => !cmpSel || cmpSel.has(sc.id));
+  if (!scs.length) { box.innerHTML = ''; return; }
+  const res = new Map(scs.map(sc => [sc.id, sc.id === project.activeId ? R : analyse(sc.model)]));
+  const key = cmpKey(), mm = meta(key), f = FMT[key] || fmt3, f3 = v => (v == null ? '—' : v.toFixed(3));
+  // escala de cor comum a todos os cenários incluídos
+  const vals = [];
+  res.forEach(r => r.ids.forEach(id => { const v = r.per[id][key]; if (v != null && isFinite(v)) vals.push(v); }));
+  const mn = vals.length ? Math.min(...vals) : 0, mx = vals.length ? Math.max(...vals) : 1;
+  const colourIn = r => id => measureColor(r.per[id][key], mn, mx, mm.invert);
+
+  if (cmpView === 'maps' || cmpView === 'jgraph') {
+    const legend = cmpView === 'maps'
+      ? `<div class="legend cmp-legend"><span>${esc(t('legend.seg'))} · ${f(mm.invert ? mx : mn)}</span><span class="ramp"></span><span>${f(mm.invert ? mn : mx)} · ${esc(t('legend.int'))}</span></div><p class="hint cmp-note">${esc(t('cmp.scale'))}</p>`
+      : '';
+    box.innerHTML = legend + `<div class="mini-grid">${scs.map(sc => { const r = res.get(sc.id); return `
+      <figure class="mini${sc.id === project.activeId ? ' active' : ''}">
+        <figcaption><span><b>${esc(sc.name)}</b><br><small>k ${r.k} · ${esc(t('card.meanInt'))} ${f3(r.meanInt)} · ${esc(t('card.rings'))} ${r.circuit}</small></span>
+          <button class="ghost" data-edit="${esc(sc.id)}">${esc(t('cmp.edit'))}</button></figcaption>
+        <svg class="minisvg" data-scn="${esc(sc.id)}" viewBox="0 0 ${W0} ${H0}" preserveAspectRatio="xMidYMid meet"></svg>
+      </figure>`; }).join('')}</div>`;
+    box.querySelectorAll('svg.minisvg').forEach(svg => {
+      const sc = scs.find(x => x.id === svg.dataset.scn), r = res.get(sc.id);
+      if (cmpView === 'maps') drawMiniMap(svg, sc.model, r, colourIn(r)); else drawJGraph(svg, sc.model, r);
+    });
+    return;
+  }
+
+  if (cmpView === 'table') {
+    const basis = t(conv.differenceFactor === 'ra' ? 'basis.ra' : 'basis.integ');
+    let rows = CMP_INDICATORS.map(([lk, fn, dig, info]) => {
+      const v = scs.map(sc => fn(res.get(sc.id)));
+      const nums = v.filter(x => x != null && isFinite(x));
+      const hi = nums.length > 1 ? Math.max(...nums) : null, lo = nums.length > 1 ? Math.min(...nums) : null;
+      return `<tr><th class="name rowh"><button class="linkish" data-info="${info}">${esc(t(lk, { basis }))}</button></th>${v.map(x => {
+        const mark = hi !== lo && x === hi ? '▲' : hi !== lo && x === lo ? '▼' : '';
+        return `<td>${x == null || !isFinite(x) ? '—' : dig ? x.toFixed(dig) : x}<span class="mark">${mark}</span></td>`;
+      }).join('')}</tr>`;
+    }).join('');
+    rows += `<tr><th class="name rowh"><button class="linkish" data-info="type">${esc(t('card.types'))}</button></th>${scs.map(sc => { const c = res.get(sc.id).typeCounts; return `<td>${c.a.length}/${c.b.length}/${c.c.length}/${c.d.length}</td>`; }).join('')}</tr>`;
+    if (scs.some(sc => sc.model.nodes.some(n => n.label))) {
+      rows += `<tr><th class="name rowh"><button class="linkish" data-info="genotype">${esc(t('cmp.genotype'))}</button></th>${scs.map(sc => `<td class="name wrap">${esc(functionalSummary(sc.model, globalOf(sc.model, res.get(sc.id))).inequality || '—')}</td>`).join('')}</tr>`;
+    }
+    box.innerHTML = `<div class="tablewrap" style="display:block"><table class="cmp-table"><thead><tr><th class="name">${esc(t('cmp.indicator'))}</th>${scs.map(sc => `<th>${esc(sc.name)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="foot">${esc(t('cmp.maxMin'))} ${esc(t('cmp.sizeNote'))}</p>`;
+    return;
+  }
+
+  // Δ por espaço entre dois cenários
+  const ids = scs.map(sc => sc.id);
+  if (!ids.includes(cmpRef)) cmpRef = ids[0];
+  if (!ids.includes(cmpOther) || cmpOther === cmpRef) cmpOther = ids.find(i => i !== cmpRef) || null;
+  const opt = selId => scs.map(sc => `<option value="${esc(sc.id)}" ${sc.id === selId ? 'selected' : ''}>${esc(sc.name)}</option>`).join('');
+  let html = `<div class="cmp-pair"><label><span>${esc(t('cmp.ref'))}</span><select id="cmpRef">${opt(cmpRef)}</select></label><span aria-hidden="true">→</span><label><span>${esc(t('cmp.other'))}</span><select id="cmpOther">${opt(cmpOther)}</select></label></div>`;
+  if (!cmpOther) { box.innerHTML = html + `<div class="valbox">${esc(t('cmp.need2'))}</div>`; return; }
+  const A = scs.find(sc => sc.id === cmpRef), B = scs.find(sc => sc.id === cmpOther), RA = res.get(A.id), RB = res.get(B.id);
+  const match = matchSpaces(A.model, B.model, A.family === B.family);
+  const rkA = ranks(RA, key), rkB = ranks(RB, key);
+  const nA = new Map(A.model.nodes.map(n => [n.id, n])), nB = new Map(B.model.nodes.map(n => [n.id, n]));
+  const dfmt = d => (f === fmtInt ? String(d) : d.toFixed(f === fmt1 ? 1 : 3));
+  const rows = match.pairs
+    .map(pr => { const va = RA.per[pr.a][key], vb = RB.per[pr.b][key]; return { pr, va, vb, d: va != null && vb != null ? vb - va : null }; })
+    .sort((x, y) => Math.abs(y.d ?? 0) - Math.abs(x.d ?? 0));
+  if (!rows.length) html += `<div class="valbox">${esc(t('cmp.noMatch'))}</div>`;
+  else html += `<div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.id'))}</th><th>${esc(A.name)}</th><th>${esc(B.name)}</th><th>Δ</th><th>${esc(t('cmp.rank'))}</th></tr></thead><tbody>
+    ${rows.map(({ pr, va, vb, d }) => {
+      const na = nA.get(pr.a), nb = nB.get(pr.b);
+      const name = na.name === nb.name ? esc(na.name) : `${esc(na.name)} → ${esc(nb.name)}`;
+      return `<tr><td class="name"><span class="chip" style="background:${colourIn(RB)(pr.b)}"></span> ${name} <span class="tag">${esc(t('cmp.by.' + pr.by))}</span></td>
+        <td>${f(va)}</td><td>${f(vb)}</td><td class="${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${d == null ? '—' : (d > 0 ? '+' : '') + dfmt(d)}</td>
+        <td>${rkA[pr.a] ?? '—'} → ${rkB[pr.b] ?? '—'}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  const only = (list, names, sc) => (list.length ? `<p class="foot">${esc(t('cmp.only', { s: sc.name, ids: list.map(i => names.get(i).name).join(', ') }))}</p>` : '');
+  html += only(match.onlyA, nA, A) + only(match.onlyB, nB, B);
+  html += `<p class="foot">${esc(t(A.family === B.family ? 'cmp.matchFamily' : 'cmp.matchOther'))} ${esc(t('cmp.sizeNote'))}</p>`;
   box.innerHTML = html;
 }
+$('cmpViews').addEventListener('click', e => { const b = e.target.closest('[data-cv]'); if (b) { cmpView = b.dataset.cv; renderCompare(); } });
+$('cmpChips').addEventListener('click', e => {
+  const b = e.target.closest('[data-chip]');
+  if (!b) return;
+  if (!cmpSel) cmpSel = new Set(project.scenarios.map(sc => sc.id));
+  if (cmpSel.has(b.dataset.chip)) { if (cmpSel.size > 1) cmpSel.delete(b.dataset.chip); } else cmpSel.add(b.dataset.chip);
+  renderCompare();
+});
+$('cmpMeasure').addEventListener('change', e => { currentMeasure = e.target.value; renderAll(); autosave(); });
+$('compareBox').addEventListener('click', e => {
+  const info = e.target.closest('[data-info]');
+  if (info) { openInfo(info.dataset.info); return; }
+  const ed = e.target.closest('[data-edit]');
+  if (ed) { switchScenario(ed.dataset.edit); setView('graph'); return; }
+  const cmd = e.target.closest('[data-cmd]');
+  if (cmd) { if (cmd.dataset.cmd === 'dup') duplicateScenario(); else newScenario(); setView('compare'); }
+});
+$('compareBox').addEventListener('change', e => {
+  if (e.target.id === 'cmpRef') cmpRef = e.target.value;
+  if (e.target.id === 'cmpOther') cmpOther = e.target.value;
+  if (cmpRef === cmpOther) cmpOther = null;
+  renderCompare();
+});
 
 /* ---------------- TOOLTIP (só mouse) ---------------- */
 function hoverTip(e) {
@@ -947,11 +1187,11 @@ function showImageOverlay(url, name) {
   $('ovl').style.display = 'flex';
 }
 function tableCSV() {
-  const cols = ['id', 'name', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+  const cols = ['id', 'name', 'label', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
   let out = cols.join(',') + '\n';
   model.nodes.forEach(n => {
     const p = R.per[n.id];
-    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
+    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
       .map(v => (typeof v === 'number' ? (+v).toFixed(4) : v == null ? '' : v)).join(',') + '\n';
   });
   return out;
@@ -1058,20 +1298,32 @@ $('exCopy').addEventListener('click', () => {
   else putIO(s, 'CSV');
 });
 $('exPrint').addEventListener('click', () => { setView('results'); setTimeout(() => window.print(), 150); });
-$('btnExport').addEventListener('click', () => { const j = JSON.stringify(model, null, 2); download(j, 'space-syntax-model.json', 'application/json'); putIO(j, 'JSON'); });
+$('btnExport').addEventListener('click', () => { const j = JSON.stringify(project, null, 2); download(j, 'space-syntax-project.json', 'application/json'); putIO(j, 'JSON'); });
 $('btnLoad').addEventListener('click', () => {
   const w = $('ioWarn');
   try {
-    const m = migrateModel(JSON.parse($('io').value));
-    const pre = snapshot(); model = m; selSet.clear(); commit(pre); recompute(); fitView();
+    const data = JSON.parse($('io').value);
     w.hidden = true;
+    if (data && typeof data === 'object' && 'scenarios' in data) { importScenarios(migrateProject(data)); return; }
+    const m = migrateModel(data);
+    const pre = snapshot(); setModel(m); selSet.clear(); commit(pre); recompute(); fitView();
   } catch (err) {
     w.hidden = false;
     w.textContent = '⚠ ' + (err instanceof SyntaxError ? t('err.json') : err.message) + ' ' + t('err.expect');
   }
 });
-$('btnReset').addEventListener('click', () => { const pre = snapshot(); model = migrateModel(VALIDATED); selSet.clear(); currentMeasure = 'integ'; radius = 0; commit(pre); recompute(); fitView(); });
-$('btnStoreB').addEventListener('click', () => { modelB = JSON.parse(snapshot()); toast(t('toast.storedB')); setView('compare'); });
+$('btnReset').addEventListener('click', () => { const pre = snapshot(); setModel(migrateModel(VALIDATED)); selSet.clear(); currentMeasure = 'integ'; radius = 0; commit(pre); recompute(); fitView(); });
+$('scnSel').addEventListener('change', e => switchScenario(e.target.value));
+$('scnName').addEventListener('change', e => { const v = e.target.value.trim().slice(0, 80); if (v) { activeScenario().name = v; renderScenarios(); autosave(); } });
+$('scnName').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+$('scnDup').addEventListener('click', duplicateScenario);
+$('scnNew').addEventListener('click', newScenario);
+$('scnList').addEventListener('click', e => {
+  const del = e.target.closest('[data-scndel]');
+  if (del) { armConfirm(del, () => deleteScenario(del.dataset.scndel)); return; }
+  const sw = e.target.closest('[data-scn]');
+  if (sw) switchScenario(sw.dataset.scn);
+});
 $('ovlClose').addEventListener('click', () => { $('ovl').style.display = 'none'; $('ovlImg').src = ''; });
 
 document.addEventListener('keydown', e => {

@@ -217,6 +217,38 @@ tbody tr.root td { font-style: italic; }
 .scard .big { font-family: var(--serif); font-size: 1.25rem; color: var(--accent); font-weight: 700; grid-row: span 2; }
 .scard .sub { grid-column: 2; font-family: var(--mono); font-size: .68rem; color: var(--muted); }
 
+/* ---------- cenários e comparação ---------- */
+.scnsel { width: auto; max-width: 15rem; font-family: var(--mono); font-size: .75rem; }
+.labelrow { display: flex; align-items: center; gap: .5rem; margin: 0 0 .5rem; font-size: .78rem; color: var(--ink2); }
+.labelrow input { flex: 1; }
+.funcbox .ineq { margin: .2rem 0; font-family: var(--serif); font-size: 1rem; color: var(--ink); }
+.funcbox .ineq .k { font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-right: .4rem; }
+.funcbox .tablewrap { margin-top: .5rem; }
+.mini { color: var(--muted); font-size: .7rem; }
+.cmp-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; background: var(--panel); color: var(--ink2); border-right: 1px solid var(--rule); }
+.seg button:last-child { border-right: none; }
+.seg button[aria-selected="true"] { background: var(--wall); color: var(--paper); }
+.chips { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.chipbtn { background: var(--panel); color: var(--ink2); border: 1px solid var(--rule); border-radius: 999px; font-size: .72rem; }
+.chipbtn[aria-pressed="true"] { background: var(--sel); color: var(--ink); border-color: var(--accent); }
+.chipbtn[aria-pressed="true"]::before { content: "✓ "; }
+.cmp-legend { justify-content: center; margin: 0; }
+.cmp-note { text-align: center; margin: .2rem 0 .6rem; }
+.mini-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .7rem; }
+figure.mini { margin: 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--panel); overflow: hidden; }
+figure.mini.active { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+figure.mini figcaption { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .45rem .6rem; border-bottom: 1px solid var(--rule); font-size: .82rem; }
+figure.mini figcaption small { font-family: var(--mono); font-size: .66rem; color: var(--muted); }
+svg.minisvg { display: block; width: 100%; aspect-ratio: 4 / 3; height: auto; }
+.cmp-table th.rowh { background: var(--panel); color: var(--ink); text-transform: none; letter-spacing: 0; font-size: .74rem; position: static; }
+.cmp-table td.wrap { white-space: normal; min-width: 10rem; }
+.mark { color: var(--accent); font-size: .65rem; margin-left: .2rem; }
+.tag { font-family: var(--mono); font-size: .6rem; color: var(--muted); border: 1px solid var(--rule); border-radius: 4px; padding: 0 .25rem; margin-left: .3rem; }
+.cmp-pair { display: flex; align-items: flex-end; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.cmp-pair label { display: flex; flex-direction: column; gap: .2rem; font-family: var(--mono); font-size: .66rem; color: var(--muted); flex: 1; min-width: 9rem; }
+
 /* ---------- bottom sheet ---------- */
 .sheet {
   position: fixed; z-index: 60; right: 1rem; bottom: 1rem; width: 350px; max-height: 75vh; overflow-y: auto;
@@ -292,7 +324,14 @@ dialog.infodlg::backdrop { background: rgba(28, 27, 24, .45); }
     grid-template-areas: "bar" "main" "nav";
   }
   .appbar { padding: .25rem .4rem .25rem .7rem; }
-  .brand { font-size: 1.05rem; margin-right: 0; overflow: hidden; text-overflow: ellipsis; }
+  .brand { display: none; }
+  .scnsel { flex: 1; max-width: none; min-width: 0; }
+  .appbar .spacer { display: none; }
+  .mini-grid { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: .6rem; padding-bottom: .4rem; }
+  figure.mini { flex: 0 0 86%; scroll-snap-align: center; }
+  .cmp-head .measure-pick { width: 100%; }
+  .seg { width: 100%; }
+  .seg button { flex: 1; padding: .3rem .2rem; font-size: .68rem; }
   .brand small { display: none; }
   .toptabs, .desk-only { display: none; }
   .panel { grid-area: main; display: none; border-right: none; padding-bottom: 1.5rem; }
