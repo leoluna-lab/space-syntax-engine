@@ -176,3 +176,28 @@ describe('orientação (faces) — F4.2', () => {
     expect(vis.per.q1.integ).not.toBeCloseTo(acc.per.q1.integ!, 3);
   });
 });
+
+describe('cálculo sintático usa só ligações de passagem (acesso e aberto)', () => {
+  it('opaco e vista não alteram nenhuma medida', async () => {
+    const { syntacticInput } = await import('../src/engine');
+    const m = migrateModel(casa());
+    const base = analyse(syntacticInput(m));
+    // trocar todas as opacas por vista e acrescentar opacas/vistas novas não muda nada
+    const m2 = migrateModel(casa());
+    m2.edges.forEach(e => { if (e.kind === 'opaco') e.kind = 'vista'; });
+    m2.edges.push({ a: 'q1', b: 'c1', kind: 'opaco' }, { a: 'q2', b: 'v1', kind: 'vista' });
+    const other = analyse(syntacticInput(m2));
+    expect(other.per).toEqual(base.per);
+    expect([other.L, other.circuit, other.meanInt]).toEqual([base.L, base.circuit, base.meanInt]);
+    expect(base.L).toBe(6); // só as 6 ligações de passagem
+  });
+
+  it('aberto conta como passagem; mudar uma passagem para vista muda as medidas', async () => {
+    const { syntacticInput } = await import('../src/engine');
+    const m = migrateModel(casa());
+    const base = analyse(syntacticInput(m));
+    const e = m.edges.find(x => x.a === 'c1' && x.b === 'v1')!; // aberto
+    e.kind = 'vista';
+    expect(analyse(syntacticInput(m)).L).toBe(base.L - 1);
+  });
+});

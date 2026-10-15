@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, LAYERS, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, SYNTACTIC_LAYER, syntacticInput, jgraphLayout, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -79,12 +79,12 @@ function kindLines(kind, x1, y1, x2, y2, opacity = 1, extraClass = '') {
   return out;
 }
 const kindSwatch = k => `<svg class="kindsw" viewBox="0 0 44 12" aria-hidden="true">${kindLines(k, 3, 6, 41, 6).map(el => el.outerHTML).join('')}</svg>`;
-let layer = 'acesso', doorIsVisual = true;
-const effLayer = () => (researchMode ? layer : 'acesso');
-const layerOpts = () => ({ doorIsVisual });
-const inLayer = e => layerKinds(effLayer(), layerOpts()).has(e.kind);
-const pairsOf = m => layerInput(m, effLayer(), layerOpts()).edges;
-function analyse(m, r = radius) { return runAnalysis(layerInput(m, effLayer(), layerOpts()), { ...conv, radius: r }); }
+// Medidas sintáticas usam SÓ as ligações de passagem (acesso e aberto), como na literatura.
+// opaco e vista ficam registradas (e na orientação), mas fora do cálculo — ver syntacticInput no motor.
+const PASSAGE = layerKinds(SYNTACTIC_LAYER);
+const inLayer = e => PASSAGE.has(e.kind);
+const pairsOf = m => syntacticInput(m).edges;
+function analyse(m, r = radius) { return runAnalysis(syntacticInput(m), { ...conv, radius: r }); }
 /** O modelo tem informação que só o modo Pesquisa mostra? (o exterior marcado sozinho não conta) */
 const hasResearchData = m => m.edges.some(e => e.kind !== 'acesso' || e.face);
 function setResearchMode(on) {
@@ -112,7 +112,7 @@ function autosave() {
   try {
     localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      currentMeasure, showValues, snap, radius, conv, projector, layer, doorIsVisual, researchMode, tolCm, minContactCm,
+      currentMeasure, showValues, snap, radius, conv, projector, researchMode, tolCm, minContactCm,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -132,9 +132,7 @@ function loadSaved() {
       currentMeasure = o.currentMeasure || 'integ';
       showValues = !!o.showValues; snap = !!o.snap; radius = o.radius || 0; projector = !!o.projector;
       if (o.conv) conv = Object.assign(conv, o.conv);
-      if (LAYERS.includes(o.layer)) layer = o.layer;
       researchMode = !!o.researchMode;
-      if (o.doorIsVisual === false) doorIsVisual = false;
       if (o.tolCm > 0) tolCm = o.tolCm;
       if (o.minContactCm > 0) minContactCm = o.minContactCm;
       if (o.bg) bg = Object.assign(bg, o.bg);
@@ -240,7 +238,6 @@ function renderPanel() {
   ss.value = sortKey;
   $('optSnap').checked = snap; $('optValues').checked = showValues; $('optRadius').value = radius;
   $('optEntropy').value = conv.entropy; $('optHFactor').value = conv.differenceFactor;
-  $('optDoorVisual').checked = doorIsVisual;
   const sc = model.geo && model.geo.escala_m_por_unidade;
   $('scaleTxt').textContent = sc ? t('scale.value', { n: (1 / sc).toFixed(1) }) : t('scale.none');
   $('optTol').value = tolCm; $('optMinContact').value = minContactCm;
@@ -250,10 +247,6 @@ function renderPanel() {
   if (document.activeElement !== $('northNum')) $('northNum').value = Math.round(north);
   $('northRange').value = Math.round(north);
   renderExemplar();
-  document.querySelectorAll('select.layer-sel').forEach(sel => {
-    sel.innerHTML = LAYERS.map(l => `<option value="${l}">${esc(t('layer.' + l))}</option>`).join('');
-    sel.value = layer;
-  });
   const labs = new Set(t('label.presets').split('|'));
   project.scenarios.forEach(sc => sc.model.nodes.forEach(n => { if (n.label) labs.add(n.label); }));
   $('labelOptions').innerHTML = [...labs].map(l => `<option value="${esc(l)}"></option>`).join('');
@@ -1258,34 +1251,19 @@ $('infoDlg').addEventListener('click', e => {
 /** Desenha o grafo justificado de `m` (resultado `Rx`) em `svg`. Usado na aba J-graph e na comparação. */
 function drawJGraph(svg, m, Rx, sel = new Set()) {
   svg.innerHTML = '';
-  const W = W0, Hh = H0, padB = 56, padT = 40;
-  const layers = {}; let maxD = 0, hasNull = false;
-  m.nodes.forEach(n => {
-    const d = Rx.per[n.id].depth;
-    if (d == null) { hasNull = true; return; }
-    (layers[d] = layers[d] || []).push(n.id); maxD = Math.max(maxD, d);
+  // Layout em árvore (motor: jgraphLayout): pai centrado sobre os filhos, filho único no mesmo eixo vertical,
+  // sem espalhar cada nível pela largura; a árvore pode se espraiar e o desenho cresce com ela.
+  const pairs = pairsOf(m), lay = jgraphLayout(m.nodes, pairs, m.root);
+  const pj = lay.pos, W = lay.width, key = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
+  svg.setAttribute('viewBox', `0 0 ${W} ${lay.height}`);
+  lay.levelY.forEach((y, d) => {
+    svg.appendChild(Eo('line', { x1: 34, y1: y, x2: W - 14, y2: y, stroke: C.rule, 'stroke-width': 1, 'stroke-dasharray': '2 4' }));
+    svg.appendChild(txt(16, y + 4, 'd' + d, 11, C.muted, null, 't-name'));
   });
-  const rows = maxD + (hasNull ? 2 : 1), yFor = d => Hh - padB - d * ((Hh - padB - padT) / Math.max(1, rows - 1));
-  const pj = {};
-  for (let d = 0; d <= maxD; d++) { const arr = layers[d] || []; arr.forEach((id, i) => { pj[id] = { x: W / (arr.length + 1) * (i + 1), y: yFor(d) }; }); }
-  if (hasNull) { const arr = m.nodes.filter(n => Rx.per[n.id].depth == null).map(n => n.id); arr.forEach((id, i) => { pj[id] = { x: W / (arr.length + 1) * (i + 1), y: padT - 16 }; }); }
-  for (let d = 0; d <= maxD; d++) {
-    svg.appendChild(Eo('line', { x1: 40, y1: yFor(d), x2: W - 14, y2: yFor(d), stroke: C.rule, 'stroke-width': 1, 'stroke-dasharray': '2 4' }));
-    svg.appendChild(txt(18, yFor(d) + 4, 'd' + d, 11, C.muted, null, 't-name'));
-  }
-  // arestas da árvore de busca em largura a partir da raiz; as demais (anéis) tracejadas
-  const adj = new Map(m.nodes.map(n => [n.id, []]));
-  const pairs = pairsOf(m);
-  pairs.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
-  const key = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
-  const tree = new Set();
-  if (m.root && adj.has(m.root)) {
-    const seen = new Set([m.root]), q = [m.root];
-    for (let h = 0; h < q.length; h++) for (const w of adj.get(q[h])) if (!seen.has(w)) { seen.add(w); tree.add(key(q[h], w)); q.push(w); }
-  }
+  // ligações da árvore (contínuas) e as que fecham anéis (tracejadas)
   pairs.forEach(([a, b]) => {
     if (!pj[a] || !pj[b]) return;
-    const isTree = tree.has(key(a, b));
+    const isTree = lay.tree.has(key(a, b));
     svg.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: isTree ? C.wall : C.accent, 'stroke-width': isTree ? 1.8 : 1.2, 'stroke-dasharray': isTree ? '' : '5 3', 'stroke-opacity': isTree ? 0.9 : 0.7 }));
   });
   const ramp = ['#e9dcc6', '#dcae82', '#cc7f52', '#b25334', '#8a2d1f', '#6a2016', '#4d170f'];
@@ -1343,7 +1321,7 @@ function renderResults() {
     : `<span class="ok">${esc(t('val.ok'))}</span>`);
   const f3 = v => (v == null ? '—' : v.toFixed(3));
   const cards = [
-    ['card.k', g.k, 'k'], [researchMode ? 'card.L' : 'card.Lsimple', g.L, 'L'], ...(researchMode ? [['card.layer', t('layer.' + layer), 'layer']] : []), ['card.rings', g.circuit, 'rings'], ['card.ringiness', g.ringiness.toFixed(3), 'ringiness'],
+    ['card.k', g.k, 'k'], [researchMode ? 'card.L' : 'card.Lsimple', g.L, 'L'], ['card.rings', g.circuit, 'rings'], ['card.ringiness', g.ringiness.toFixed(3), 'ringiness'],
     ['card.meanConn', g.meanConn.toFixed(2), 'meanConn'], ['card.meanMD', f3(g.meanMD), 'md'], ['card.meanInt', f3(g.meanInt), 'integ'],
     ['card.meanRRA', f3(g.meanRRA), 'rra'], ['card.diameter', g.diameter, 'diameter'], ['card.Hs', f3(g.Hs), 'Hs'],
     ['card.int', f3(g.intelligibility), 'intelligibility'],
@@ -1374,7 +1352,7 @@ function renderResults() {
   }).join('');
   renderFunctional();
   renderOrientation();
-  $('methodFoot').innerHTML = (researchMode ? t('method.layer', { layer: t('layer.' + layer), kinds: [...layerKinds(layer, layerOpts())].map(k => t('kind.' + k)).join(', ') }) : '') + t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
+  $('methodFoot').innerHTML = (researchMode ? t('method.passage') : '') + t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
     t(conv.differenceFactor === 'ra' ? 'method.h.ra' : 'method.h.int') + t('method.tail');
 }
 $('resTable').querySelector('thead').addEventListener('click', e => {
@@ -1606,7 +1584,7 @@ function renderCompare() {
       rows += `<tr><th class="name rowh"><button class="linkish" data-info="genotype">${esc(t('cmp.genotype'))}</button></th>${scs.map(sc => `<td class="name wrap">${esc(functionalSummary(sc.model, globalOf(sc.model, res.get(sc.id))).inequality || '—')}</td>`).join('')}</tr>`;
     }
     box.innerHTML = `<div class="tablewrap" style="display:block"><table class="cmp-table"><thead><tr><th class="name">${esc(t('cmp.indicator'))}</th>${scs.map(sc => `<th>${esc(sc.name)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="foot">${researchMode ? esc(t('cmp.layerNote', { layer: t('layer.' + layer) })) + ' ' : ''}${esc(t('cmp.maxMin'))} ${esc(t('cmp.sizeNote'))}</p>`;
+      <p class="foot">${researchMode ? esc(t('cmp.passageNote')) + ' ' : ''}${esc(t('cmp.maxMin'))} ${esc(t('cmp.sizeNote'))}</p>`;
     return;
   }
 
@@ -1702,7 +1680,7 @@ function tableCSV() {
   model.nodes.forEach(n => {
     const p = R.per[n.id];
     const faces = orient[n.id] ? FACES.filter(f => orient[n.id].faces[f]).map(f => f + ':' + orient[n.id].faces[f]).join(';') : '';
-    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', ...(researchMode ? [layer, faces] : []), p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
+    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', ...(researchMode ? [SYNTACTIC_LAYER, faces] : []), p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
       .map(v => (typeof v === 'number' ? (+v).toFixed(4) : v == null ? '' : v)).join(',') + '\n';
   });
   return out;
@@ -1788,12 +1766,6 @@ $('optRadius').addEventListener('change', e => { radius = clamp(parseInt(e.targe
 $('optEntropy').addEventListener('change', e => { conv.entropy = e.target.value; recompute(); });
 $('optHFactor').addEventListener('change', e => { conv.differenceFactor = e.target.value; recompute(); });
 document.querySelectorAll('[data-mode-btn]').forEach(b => b.addEventListener('click', () => setResearchMode(b.dataset.modeBtn === 'research')));
-$('optDoorVisual').addEventListener('change', e => { doorIsVisual = e.target.checked; recompute(); });
-document.addEventListener('change', e => {
-  if (!e.target.classList || !e.target.classList.contains('layer-sel')) return;
-  layer = e.target.value;
-  recompute();
-});
 $('btnDerive').addEventListener('click', openReview);
 $('btnCalib').addEventListener('click', () => { setView('graph'); setMode('measure'); });
 $('btnExt').addEventListener('click', createExterior);
@@ -1822,7 +1794,7 @@ $('bgClear').addEventListener('click', () => { bg.img = null; $('bgControls').hi
 
 $('exCSV').addEventListener('click', () => { const s = tableCSV(); download(s, 'space-syntax-measures.csv', 'text/csv'); putIO(s, 'CSV'); });
 $('exPNG').addEventListener('click', () => exportPNG(svgG, 'configuration-graph.png', contentBounds(ASPECT)));
-$('exPNGJ').addEventListener('click', () => exportPNG(svgJ, 'justified-graph.png'));
+$('exPNGJ').addEventListener('click', () => { const v = svgJ.viewBox.baseVal; exportPNG(svgJ, 'justified-graph.png', { x: v.x, y: v.y, w: v.width, h: v.height }); });
 $('exCopy').addEventListener('click', () => {
   const s = tableCSV();
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(s).then(() => toast(t('toast.copied'))).catch(() => putIO(s, 'CSV'));

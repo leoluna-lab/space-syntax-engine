@@ -85,3 +85,15 @@ export function orientation(model: Pick<Model, 'nodes' | 'edges'>): OrientationS
   }
   return { perSpace, byFace, noFace };
 }
+
+/**
+ * Regra do cálculo sintático (decisão de 2026-10-14): integração, choice, profundidade, controle,
+ * entropia etc. usam SÓ as ligações de passagem — `acesso` e `aberto` —, como na literatura
+ * (grafo de permeabilidade, Hillier & Hanson 1984). `opaco` e `vista` ficam registradas no modelo
+ * e na orientação, mas não entram nas medidas: extrair métricas delas é questão de pesquisa em aberto.
+ * As camadas `visual` e `adjacencia` continuam disponíveis no motor, sem uso na interface.
+ */
+export const SYNTACTIC_LAYER: Layer = 'acesso';
+export function syntacticInput(model: Pick<Model, 'nodes' | 'edges' | 'root'>): AnalysisInput {
+  return layerInput(model, SYNTACTIC_LAYER);
+}

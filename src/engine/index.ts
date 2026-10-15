@@ -5,3 +5,4 @@ export * from './project';
 export * from './compare';
 export * from './layers';
 export * from './exemplar';
+export * from './jgraph';

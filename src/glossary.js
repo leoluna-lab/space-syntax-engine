@@ -159,10 +159,10 @@ export const GLOSSARY = {
       ref: 'Roteiro F4 da pesquisa; protocolo de codificação',
     },
     layer: {
-      title: 'Camada analisada',
-      def: 'Cada par de espaços que se toca tem uma interface: opaco (parede cega), vista (permeável à vista, como o cobogó), acesso (porta) ou aberto (totalmente aberto). A camada escolhe quais interfaces viram ligação do grafo.',
-      formula: 'acesso = {acesso, aberto} · visual = {vista, aberto} + acesso (porta aberta, configurável) · adjacência = todas',
-      read: 'Acesso é o grafo de permeabilidade clássico de Hillier & Hanson. Visual mostra o que se vê de um espaço a outro. Adjacência é a vizinhança construída, base para medir a diferença entre o grafo pretendido e o construído. Compare uma mesma planta nas três camadas.',
+      title: 'Categorias de interface',
+      def: 'Cada par de espaços que se toca tem uma interface: opaco (parede cega), vista (permeável à vista, como janela ou cobogó), acesso (porta) ou aberto (totalmente aberto, sem divisão).',
+      formula: 'Entram nas medidas sintáticas: acesso e aberto (passagem). Ficam registradas, fora do cálculo: opaco e vista.',
+      read: 'Integração, choice, profundidade e as demais medidas usam só as passagens — o grafo de permeabilidade da literatura. Opaco e vista ficam guardados no modelo e aparecem na orientação (faces), mas extrair métricas delas (relações visuais, vizinhança construída) é questão de pesquisa ainda em aberto e não está implementado.',
       ref: 'Hillier & Hanson 1984 (permeabilidade); roteiro F4 da pesquisa',
     },
     orientation: {
@@ -343,10 +343,10 @@ export const GLOSSARY = {
       ref: 'Research roadmap F4; coding protocol',
     },
     layer: {
-      title: 'Analysed layer',
-      def: 'Every pair of touching spaces has an interface: opaque (blank wall), view (see-through, like a cobogó screen), access (door) or open (fully open). The layer chooses which interfaces become graph links.',
-      formula: 'access = {access, open} · visual = {view, open} + access (open door, configurable) · adjacency = all',
-      read: 'Access is the classic Hillier & Hanson permeability graph. Visual shows what can be seen from one space to another. Adjacency is the built neighbourhood, the basis for measuring the gap between intended and built graph. Compare one plan across the three layers.',
+      title: 'Interface categories',
+      def: 'Every pair of touching spaces has an interface: opaque (blank wall), view (see-through, like a window or cobogó), access (door) or open (fully open, no partition).',
+      formula: 'Used in syntactic measures: access and open (passage). Recorded but left out of the calculation: opaque and view.',
+      read: 'Integration, choice, depth and the other measures use passages only — the permeability graph of the literature. Opaque and view are kept in the model and shown in the orientation (faces), but deriving metrics from them (visual relations, built adjacency) is an open research question and is not implemented.',
       ref: 'Hillier & Hanson 1984 (permeability); research roadmap F4',
     },
     orientation: {
