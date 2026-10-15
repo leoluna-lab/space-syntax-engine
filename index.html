@@ -218,6 +218,16 @@
     <section class="view" id="view-results" role="tabpanel">
       <div class="valbox" id="valBox"></div>
       <div class="cards" id="globalCards"></div>
+      <div class="valbox scatterbox" id="scatterBox">
+        <h4><span data-i18n="scatter.title"></span> <button class="linkish" id="scatterInfo" data-i18n-aria="aboutMeasure">ⓘ</button></h4>
+        <div class="scatter-ctrl">
+          <label><span data-i18n="scatter.x"></span><select id="scatterXSel"></select></label>
+          <button class="icon" id="scatterSwap" data-i18n-aria="scatter.swap">⇄</button>
+          <label><span data-i18n="scatter.y"></span><select id="scatterYSel"></select></label>
+        </div>
+        <svg id="scatterSvg" class="scatter" viewBox="0 0 640 380" role="img" data-i18n-aria="scatter.title"></svg>
+        <p class="hint" id="scatterNote" style="margin:.2rem 0 0"></p>
+      </div>
       <div class="valbox funcbox" id="funcBox"></div>
       <div class="valbox funcbox" id="orientBox" hidden></div>
       <label class="sortbar"><span data-i18n="sortBy"></span><select id="sortSel"></select></label>
