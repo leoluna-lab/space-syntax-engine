@@ -2,6 +2,7 @@ import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, 
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
+import { niceTicks, linearFit, groupCoincident } from './util/chart.ts';
 import { snapPoint, sharedWall } from './geometry/snap.ts';
 import { detectAdjacency, closeGaps } from './geometry/adjacency.ts';
 import { exteriorPieces, suggestFaces } from './geometry/exterior.ts';
@@ -112,7 +113,7 @@ function autosave() {
   try {
     localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      currentMeasure, showValues, snap, radius, conv, projector, researchMode, tolCm, minContactCm,
+      currentMeasure, showValues, snap, radius, conv, projector, researchMode, tolCm, minContactCm, scatterX, scatterY,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -133,6 +134,8 @@ function loadSaved() {
       showValues = !!o.showValues; snap = !!o.snap; radius = o.radius || 0; projector = !!o.projector;
       if (o.conv) conv = Object.assign(conv, o.conv);
       researchMode = !!o.researchMode;
+      if (SCATTER_KEYS.includes(o.scatterX)) scatterX = o.scatterX;
+      if (SCATTER_KEYS.includes(o.scatterY)) scatterY = o.scatterY;
       if (o.tolCm > 0) tolCm = o.tolCm;
       if (o.minContactCm > 0) minContactCm = o.minContactCm;
       if (o.bg) bg = Object.assign(bg, o.bg);
@@ -1254,17 +1257,17 @@ function drawJGraph(svg, m, Rx, sel = new Set()) {
   // Layout em árvore (motor: jgraphLayout): pai centrado sobre os filhos, filho único no mesmo eixo vertical,
   // sem espalhar cada nível pela largura; a árvore pode se espraiar e o desenho cresce com ela.
   const pairs = pairsOf(m), lay = jgraphLayout(m.nodes, pairs, m.root);
-  const pj = lay.pos, W = lay.width, key = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
+  const pj = lay.pos, W = lay.width;
   svg.setAttribute('viewBox', `0 0 ${W} ${lay.height}`);
   lay.levelY.forEach((y, d) => {
     svg.appendChild(Eo('line', { x1: 34, y1: y, x2: W - 14, y2: y, stroke: C.rule, 'stroke-width': 1, 'stroke-dasharray': '2 4' }));
     svg.appendChild(txt(16, y + 4, 'd' + d, 11, C.muted, null, 't-name'));
   });
-  // ligações da árvore (contínuas) e as que fecham anéis (tracejadas)
   pairs.forEach(([a, b]) => {
     if (!pj[a] || !pj[b]) return;
-    const isTree = lay.tree.has(key(a, b));
-    svg.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: isTree ? C.wall : C.accent, 'stroke-width': isTree ? 1.8 : 1.2, 'stroke-dasharray': isTree ? '' : '5 3', 'stroke-opacity': isTree ? 0.9 : 0.7 }));
+    // todas as permeabilidades com o mesmo traço (Hillier & Hanson): o anel aparece como circuito,
+    // sem eleger arbitrariamente uma ligação "que fecha" — a árvore só define a posição dos nós
+    svg.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: C.wall, 'stroke-width': 1.8, 'stroke-opacity': 0.9 }));
   });
   const ramp = ['#e9dcc6', '#dcae82', '#cc7f52', '#b25334', '#8a2d1f', '#6a2016', '#4d170f'];
   m.nodes.forEach(n => {
@@ -1350,6 +1353,7 @@ function renderResults() {
       <span class="sub">${n.label ? esc(n.label) + ' · ' : ''}${esc(t('type'))} ${p.type} · ${esc(t('col.integ'))} ${fmt3(p.integ)} · ${esc(t('col.choice'))} ${fmt1(p.choice)} · ${esc(t('col.depth'))} ${fmtInt(p.depth)}</span>
     </button>`;
   }).join('');
+  renderScatter();
   renderFunctional();
   renderOrientation();
   $('methodFoot').innerHTML = (researchMode ? t('method.passage') : '') + t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
@@ -1652,6 +1656,110 @@ function hoverTip(e) {
 }
 function hideTip() { tip.style.opacity = 0; }
 
+/* ---------------- DISPERSÃO ENTRE MEDIDAS (Resultados) ---------------- */
+// Cada ponto é um espaço; o usuário escolhe a medida de cada eixo. Padrão: conectividade × integração,
+// o gráfico clássico da inteligibilidade (Hillier 1996). Uma série só: um tom, sem legenda; o título nomeia.
+const SCATTER_KEYS = ['conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+let scatterX = 'conn', scatterY = 'integ';
+// área de desenho: menor no celular, para o texto do SVG não encolher demais ao caber na tela
+let SC = { w: 640, h: 380, l: 58, r: 18, t: 16, b: 48 };
+function renderScatter() {
+  const svg = $('scatterSvg');
+  SC = narrow.matches ? { w: 380, h: 300, l: 50, r: 12, t: 14, b: 44 } : { w: 640, h: 380, l: 58, r: 18, t: 16, b: 48 };
+  svg.setAttribute('viewBox', `0 0 ${SC.w} ${SC.h}`);
+  for (const [id, val] of [['scatterXSel', scatterX], ['scatterYSel', scatterY]]) {
+    const s = $(id);
+    s.innerHTML = SCATTER_KEYS.map(k => `<option value="${k}">${esc(t('m.' + k))}</option>`).join('');
+    s.value = val;
+  }
+  svg.innerHTML = '';
+  const kx = scatterX, ky = scatterY, fx = FMT[kx] || fmt3, fy = FMT[ky] || fmt3;
+  const pts = model.nodes.map(n => ({ id: n.id, name: n.name, x: R.per[n.id][kx], y: R.per[n.id][ky] }))
+    .filter(p => p.x != null && p.y != null && isFinite(p.x) && isFinite(p.y));
+  const left = model.nodes.length - pts.length;
+  if (!pts.length) { $('scatterNote').textContent = t('scatter.empty'); return; }
+  const tx = niceTicks(Math.min(...pts.map(p => p.x)), Math.max(...pts.map(p => p.x)));
+  const ty = niceTicks(Math.min(...pts.map(p => p.y)), Math.max(...pts.map(p => p.y)));
+  // margem interna de 4% para os pontos não ficarem colados nos eixos
+  const px = (tx[tx.length - 1] - tx[0]) * 0.04, py = (ty[ty.length - 1] - ty[0]) * 0.04;
+  const x0 = tx[0] - px, x1 = tx[tx.length - 1] + px, y0 = ty[0] - py, y1 = ty[ty.length - 1] + py;
+  const X = v => SC.l + ((v - x0) / (x1 - x0)) * (SC.w - SC.l - SC.r);
+  const Y = v => SC.h - SC.b - ((v - y0) / (y1 - y0)) * (SC.h - SC.t - SC.b);
+  const ink = C.ink2, rule = C.rule, mono = MONO;
+  // grade e eixos recessivos
+  tx.forEach(v => {
+    svg.appendChild(Eo('line', { x1: X(v), y1: SC.t, x2: X(v), y2: SC.h - SC.b, stroke: rule, 'stroke-width': 1 }));
+    svg.appendChild(Object.assign(Eo('text', { x: X(v), y: SC.h - SC.b + 16, 'font-family': mono, 'font-size': 10.5, fill: ink, 'text-anchor': 'middle' }), { textContent: String(v) }));
+  });
+  ty.forEach(v => {
+    svg.appendChild(Eo('line', { x1: SC.l, y1: Y(v), x2: SC.w - SC.r, y2: Y(v), stroke: rule, 'stroke-width': 1 }));
+    svg.appendChild(Object.assign(Eo('text', { x: SC.l - 8, y: Y(v) + 3.5, 'font-family': mono, 'font-size': 10.5, fill: ink, 'text-anchor': 'end' }), { textContent: String(v) }));
+  });
+  svg.appendChild(Object.assign(Eo('text', { x: (SC.l + SC.w - SC.r) / 2, y: SC.h - 8, 'font-family': mono, 'font-size': 11.5, fill: C.ink, 'text-anchor': 'middle' }), { textContent: t('m.' + kx) }));
+  svg.appendChild(Object.assign(Eo('text', { x: 14, y: (SC.t + SC.h - SC.b) / 2, 'font-family': mono, 'font-size': 11.5, fill: C.ink, 'text-anchor': 'middle', transform: `rotate(-90 14 ${(SC.t + SC.h - SC.b) / 2})` }), { textContent: t('m.' + ky) }));
+  // reta de tendência (mínimos quadrados), recortada à área do gráfico
+  const fit = pts.length >= 3 ? linearFit(pts.map(p => p.x), pts.map(p => p.y)) : null;
+  if (fit) {
+    const clip = Eo('clipPath', { id: 'scClip' });
+    clip.appendChild(Eo('rect', { x: SC.l, y: SC.t, width: SC.w - SC.l - SC.r, height: SC.h - SC.t - SC.b }));
+    svg.appendChild(clip);
+    svg.appendChild(Eo('line', { x1: X(x0), y1: Y(fit.a + fit.b * x0), x2: X(x1), y2: Y(fit.a + fit.b * x1), stroke: C.ink2, 'stroke-width': 1.5, 'stroke-dasharray': '6 4', 'clip-path': 'url(#scClip)', 'pointer-events': 'none' }));
+  }
+  // pontos (≥ 10 px, anel da cor do fundo para separar sobreposições) e rótulos agrupados por coordenada
+  const groups = groupCoincident(pts), many = pts.length > 24;
+  // rótulos: à direita do ponto; perto da borda direita, à esquerda; pontos vizinhos na mesma coluna alternam o lado
+  const side = new Map();
+  const byCol = [...groups].sort((a, b) => X(a[0].x) - X(b[0].x) || Y(a[0].y) - Y(b[0].y));
+  byCol.forEach((gp, i) => {
+    const prev = byCol[i - 1], sx = X(gp[0].x);
+    let left = sx > SC.w - SC.r - 50;
+    if (prev && Math.abs(X(prev[0].x) - sx) < 4 && Math.abs(Y(prev[0].y) - Y(gp[0].y)) < 13) left = !side.get(prev);
+    side.set(gp, left);
+  });
+  groups.forEach(gp => {
+    const p = gp[0], sel = gp.some(q => selSet.has(q.id)), isRoot = gp.some(q => q.id === model.root);
+    const g = Eo('g', { class: 'scpt', transform: `translate(${X(p.x)},${Y(p.y)})` });
+    g.dataset.ids = gp.map(q => q.id).join('\u0000');
+    g.appendChild(Eo('circle', { r: 14, fill: 'transparent' }));
+    if (sel) g.appendChild(Eo('circle', { r: 10, fill: 'none', stroke: C.accent, 'stroke-width': 2, 'stroke-opacity': 0.6 }));
+    g.appendChild(Eo('circle', { r: sel ? 6.5 : 5.5, fill: C.accent, stroke: C.panel, 'stroke-width': 2 }));
+    if (isRoot) g.appendChild(Eo('circle', { r: 8.5, fill: 'none', stroke: C.accent, 'stroke-width': 1.3 }));
+    if (!many || sel) {
+      const onLeft = side.get(gp);
+      const lb = Eo('text', { x: onLeft ? -9 : 9, y: -6, 'font-family': mono, 'font-size': 10.5, fill: C.ink2, 'font-weight': sel ? 700 : 400, 'text-anchor': onLeft ? 'end' : 'start' });
+      lb.textContent = gp.map(q => q.id).join(', ');
+      g.appendChild(lb);
+    }
+    svg.appendChild(g);
+  });
+  // estatística: r, R², n (a inteligibilidade é conectividade × integração global)
+  let note = fit ? t('scatter.stats', { r: fit.r.toFixed(3), r2: (fit.r * fit.r).toFixed(3), n: pts.length }) : t('scatter.few', { n: pts.length });
+  if (fit && kx === 'conn' && ky === 'integ' && radius === 0) note += ' ' + t('scatter.intel');
+  if (left) note += ' ' + t('scatter.excluded', { n: left });
+  $('scatterNote').textContent = note;
+  svg.dataset.fx = kx; svg.dataset.fy = ky;
+}
+function scatterTip(e) {
+  const g = e.target.closest('.scpt');
+  if (!g || e.pointerType !== 'mouse') { hideTip(); return; }
+  const ids = g.dataset.ids.split('\u0000'), p = R.per[ids[0]], fx = FMT[scatterX] || fmt3, fy = FMT[scatterY] || fmt3;
+  tip.innerHTML = `<b>${ids.map(id => esc(id) + ' · ' + esc(byId.get(id).name)).join('<br>')}</b><br>${esc(t('m.' + scatterX))}: ${fx(p[scatterX])}<br>${esc(t('m.' + scatterY))}: ${fy(p[scatterY])}`;
+  tip.style.opacity = 1; tip.style.left = e.clientX + 14 + 'px'; tip.style.top = e.clientY + 14 + 'px';
+}
+$('scatterSvg').addEventListener('pointermove', scatterTip);
+$('scatterSvg').addEventListener('pointerleave', hideTip);
+$('scatterSvg').addEventListener('click', e => {
+  const g = e.target.closest('.scpt');
+  if (!g) return;
+  const id = g.dataset.ids.split('\u0000')[0];
+  selSet.clear(); selSet.add(id); refreshSel(); renderGraph(); renderJ();
+  openSheet({ kind: 'node', id });
+});
+$('scatterXSel').addEventListener('change', e => { scatterX = e.target.value; renderScatter(); autosave(); });
+$('scatterYSel').addEventListener('change', e => { scatterY = e.target.value; renderScatter(); autosave(); });
+$('scatterSwap').addEventListener('click', () => { [scatterX, scatterY] = [scatterY, scatterX]; renderScatter(); autosave(); });
+$('scatterInfo').addEventListener('click', () => openInfo('intelligibility'));
+
 /* ---------------- EXPORTAÇÃO ---------------- */
 function download(data, name, type) {
   try {
@@ -1714,7 +1822,7 @@ function setView(v) {
   if (v === 'compare') renderCompare();
   hideTip();
 }
-narrow.addEventListener('change', () => { if (!narrow.matches && view === 'model') setView('graph'); });
+narrow.addEventListener('change', () => { if (!narrow.matches && view === 'model') setView('graph'); renderScatter(); });
 document.querySelectorAll('[role=tab][data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
 
 /* ---------------- LIGAÇÕES DA INTERFACE ---------------- */
