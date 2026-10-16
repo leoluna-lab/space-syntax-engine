@@ -225,8 +225,12 @@
           <label><span data-i18n="scatter.x"></span><select id="scatterXSel"></select></label>
           <button class="icon" id="scatterSwap" data-i18n-aria="scatter.swap">⇄</button>
           <label><span data-i18n="scatter.y"></span><select id="scatterYSel"></select></label>
+          <label><span data-i18n="scatter.color"></span><select id="scatterColorSel">
+            <option value="single" data-i18n="scatter.cSingle"></option><option value="label" data-i18n="scatter.cLabel"></option><option value="type" data-i18n="scatter.cType"></option>
+          </select></label>
         </div>
         <svg id="scatterSvg" class="scatter" viewBox="0 0 640 380" role="img" data-i18n-aria="scatter.title"></svg>
+        <div class="scatter-legend" id="scatterLegend"></div>
         <p class="hint" id="scatterNote" style="margin:.2rem 0 0"></p>
       </div>
       <div class="valbox funcbox" id="funcBox"></div>
@@ -239,6 +243,7 @@
 
     <section class="view" id="view-compare" role="tabpanel">
       <div class="cmp-head">
+        <button class="ghost" id="cmpExport" data-i18n="cmp.export"></button>
         <div class="seg" role="tablist" id="cmpViews">
           <button role="tab" data-cv="maps" data-i18n="cv.maps"></button>
           <button role="tab" data-cv="table" data-i18n="cv.table"></button>
@@ -263,6 +268,7 @@
 
 <section class="sheet" id="sheet" hidden aria-live="polite"></section>
 <datalist id="labelOptions"></datalist>
+<div id="report" class="report" aria-hidden="true"></div>
 <div class="toast" id="toast" role="status" hidden><span id="toastMsg"></span><button id="toastAct" hidden></button></div>
 <dialog class="infodlg" id="infoDlg"></dialog>
 <div class="tip" id="tip"></div>

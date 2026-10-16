@@ -36,3 +36,28 @@ export function groupCoincident<T extends { x: number; y: number }>(pts: T[], di
   }
   return [...map.values()];
 }
+
+/** Paleta categórica validada (dataviz, modo claro; conferida contra o fundo #faf8f2). Ordem fixa, nunca reciclada. */
+export const CATEGORICAL = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+export const OTHER_COLOR = '#8c8679';
+
+/**
+ * Cor de cada categoria na ordem em que aparece: as primeiras `max` ganham as cores da paleta;
+ * as demais (e as vazias) caem em "outros", cinza — nunca se gera uma cor nova.
+ */
+export function categoryColors(values: (string | null | undefined)[], max = CATEGORICAL.length - 1): { color: Map<string, string>; others: boolean } {
+  const color = new Map<string, string>();
+  let others = false;
+  for (const v of values) {
+    if (!v) { others = true; continue; }
+    if (color.has(v)) continue;
+    if (color.size < max) color.set(v, CATEGORICAL[color.size]); else others = true;
+  }
+  return { color, others };
+}
+
+/** CSV a partir de linhas de texto (aspas quando há vírgula, aspas, ponto e vírgula ou quebra de linha). */
+export function toCSV(rows: string[][]): string {
+  const cell = (s: string) => (/[",;\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  return rows.map(r => r.map(cell).join(',')).join('\n') + '\n';
+}

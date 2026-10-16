@@ -42,3 +42,22 @@ describe('groupCoincident', () => {
     expect(g.map(grp => grp.map(p => p.id))).toEqual([['X', 'B'], ['I']]);
   });
 });
+
+import { categoryColors, CATEGORICAL, toCSV } from '../src/util/chart';
+
+describe('categoryColors', () => {
+  it('ordem fixa de aparição; excedentes e vazios viram "outros"', () => {
+    const { color, others } = categoryColors(['estar', 'quarto', 'estar', null, 'cozinha'], 2);
+    expect([...color]).toEqual([['estar', CATEGORICAL[0]], ['quarto', CATEGORICAL[1]]]);
+    expect(others).toBe(true);
+  });
+  it('sem excedentes nem vazios, sem "outros"', () => {
+    expect(categoryColors(['a', 'b']).others).toBe(false);
+  });
+});
+
+describe('toCSV', () => {
+  it('escapa vírgulas, aspas e quebras', () => {
+    expect(toCSV([['a', 'b,c'], ['d"e', 'f\ng']])).toBe('a,"b,c"\n"d""e","f\ng"\n');
+  });
+});

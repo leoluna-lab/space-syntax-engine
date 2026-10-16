@@ -2,7 +2,8 @@ import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, 
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
-import { niceTicks, linearFit, groupCoincident } from './util/chart.ts';
+import { niceTicks, linearFit, groupCoincident, categoryColors, OTHER_COLOR, toCSV } from './util/chart.ts';
+import pkg from '../package.json';
 import { snapPoint, sharedWall } from './geometry/snap.ts';
 import { detectAdjacency, closeGaps } from './geometry/adjacency.ts';
 import { exteriorPieces, suggestFaces } from './geometry/exterior.ts';
@@ -113,7 +114,7 @@ function autosave() {
   try {
     localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      currentMeasure, showValues, snap, radius, conv, projector, researchMode, tolCm, minContactCm, scatterX, scatterY,
+      currentMeasure, showValues, snap, radius, conv, projector, researchMode, tolCm, minContactCm, scatterX, scatterY, scatterColor,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -136,6 +137,7 @@ function loadSaved() {
       researchMode = !!o.researchMode;
       if (SCATTER_KEYS.includes(o.scatterX)) scatterX = o.scatterX;
       if (SCATTER_KEYS.includes(o.scatterY)) scatterY = o.scatterY;
+      if (['single', 'label', 'type'].includes(o.scatterColor)) scatterColor = o.scatterColor;
       if (o.tolCm > 0) tolCm = o.tolCm;
       if (o.minContactCm > 0) minContactCm = o.minContactCm;
       if (o.bg) bg = Object.assign(bg, o.bg);
@@ -1414,6 +1416,64 @@ function renderOrientation() {
     <div class="tablewrap" style="display:block;margin-top:.5rem"><table><thead><tr><th class="name">${esc(t('orient.byFace'))}</th>${['opaco', 'vista', 'acesso', 'aberto'].map(k => `<th>${esc(t('kind.' + k))}</th>`).join('')}</tr></thead><tbody>${byFace}</tbody></table></div>` : ''}`;
 }
 $('orientBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
+/* ---------------- RELATÓRIO / PRANCHA (PDF pelo "imprimir" do navegador) ---------------- */
+/** Ficha metodológica: tudo o que um número reportado precisa declarar (representação, k, portador, raio, convenções, versão). */
+function methodSheet() {
+  const rootN = model.root && byId.get(model.root), geo = model.geo || {}, meta = model.meta || {};
+  const excluded = model.edges.filter(e => !inLayer(e)).length;
+  const rows = [
+    [t('rep.repr'), t('rep.reprVal') + (researchMode && excluded ? ' ' + t('rep.excluded', { n: excluded }) : '')],
+    [t('card.k'), R.k], [t('card.Lsimple'), R.L], [t('card.rings'), R.circuit],
+    [t('rep.root'), rootN ? `${rootN.id} · ${rootN.name}${rootN.exterior ? ' (' + t('badge.ext') + ')' : ''} — ${t('rep.rootIncluded')}` : '—'],
+    [t('card.radius'), radius === 0 ? t('rep.global') : radius],
+    [t('rep.norm'), t('rep.normVal')],
+    [t('conv.entropy'), t(conv.entropy === 'depthmapx' ? 'conv.entropy.dm' : 'conv.entropy.v1')],
+    [t('conv.h'), t(conv.differenceFactor === 'ra' ? 'conv.h.ra' : 'conv.h.int')],
+    [t('card.int'), t('rep.intelVal')],
+  ];
+  if (geo.escala_m_por_unidade) rows.push([t('scale'), t('scale.value', { n: (1 / geo.escala_m_por_unidade).toFixed(1) })]);
+  if (geo.norte_graus !== undefined) rows.push([t('north'), geo.norte_graus + '°']);
+  if (geo.modulo_m) rows.push([t('geo.modulo'), geo.modulo_m + ' m']);
+  for (const k of ['exemplar_id', 'conjunto', 'fonte', 'local', 'data', 'codificador']) if (meta[k]) rows.push([t('meta.' + k), k === 'conjunto' ? t('conj.' + meta[k]) : meta[k]]);
+  rows.push([t('rep.software'), `Space Syntax Engine v${pkg.version} — ${location.origin + location.pathname}`]);
+  rows.push([t('rep.date'), new Date().toLocaleString(getLang() === 'pt' ? 'pt-BR' : 'en')]);
+  return `<dl class="rep-ficha">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+}
+/** Cópia estática de um trecho da tela para o relatório: sem botões, ids e alvos de toque. */
+function staticClone(el) {
+  const c = el.cloneNode(true);
+  c.removeAttribute('id'); c.removeAttribute('hidden');
+  c.querySelectorAll('[id]').forEach(x => x.removeAttribute('id'));
+  c.querySelectorAll('.halo, .hit, .edgehit, .scatter-ctrl, select').forEach(x => x.remove());
+  c.querySelectorAll('button').forEach(b => b.replaceWith(document.createTextNode(b.textContent.trim() === 'ⓘ' ? '' : b.textContent)));
+  return c;
+}
+function printReport() {
+  renderAll(); renderJ();
+  const rep = $('report');
+  const map = staticClone(svgG), b = contentBounds(ASPECT, 30, model, true, 0);
+  map.setAttribute('viewBox', `${b.x} ${b.y} ${b.w} ${b.h}`);
+  const jg = staticClone(svgJ);
+  const m = meta(currentMeasure), [mn, mx] = measureRange(currentMeasure), f = FMT[m.key];
+  rep.innerHTML = `<header class="rep-head"><h1>${esc(activeScenario().name)}</h1><p>${esc(t('rep.subtitle'))}</p></header>
+    <section><h2>${esc(t('rep.method'))}</h2>${methodSheet()}</section>
+    <section class="rep-figs">
+      <figure><div class="rep-svg"></div><figcaption>${esc(t('rep.figMap', { m: t('m.' + m.key), lo: f(m.invert ? mx : mn), hi: f(m.invert ? mn : mx) }))}</figcaption></figure>
+      <figure><div class="rep-svg"></div><figcaption>${esc(t('rep.figJ', { root: model.root || '—' }))}</figcaption></figure>
+    </section>
+    <section class="rep-res"><h2>${esc(t('rep.results'))}</h2></section>`;
+  const [f1, f2] = rep.querySelectorAll('.rep-svg');
+  f1.appendChild(map); f2.appendChild(jg);
+  const res = rep.querySelector('.rep-res');
+  for (const id of ['globalCards', 'diagBox', 'scatterBox', 'funcBox', 'orientBox']) { const el = $(id); if (el && !el.hidden) res.appendChild(staticClone(el)); }
+  res.appendChild(staticClone($('resTable')));
+  res.appendChild(staticClone($('methodFoot')));
+  document.body.classList.add('printing-report');
+  const done = () => { document.body.classList.remove('printing-report'); rep.innerHTML = ''; window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  setTimeout(() => window.print(), 100);
+}
+
 /* ---------------- DIAGNÓSTICO CONFIGURACIONAL (H&H 1984, cap. 4) ---------------- */
 function renderDiagnosis() {
   const box = $('diagBox'), D = diagnose(syntacticInput(model), R);
@@ -1687,7 +1747,8 @@ function hideTip() { tip.style.opacity = 0; }
 // Cada ponto é um espaço; o usuário escolhe a medida de cada eixo. Padrão: conectividade × integração,
 // o gráfico clássico da inteligibilidade (Hillier 1996). Uma série só: um tom, sem legenda; o título nomeia.
 const SCATTER_KEYS = ['conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
-let scatterX = 'conn', scatterY = 'integ';
+let scatterX = 'conn', scatterY = 'integ', scatterColor = 'single'; // cor dos pontos: única | função | tipo a/b/c/d
+let scatterGroups = []; // grupos desenhados, com posição em tela do SVG, para a seleção por caixa
 // área de desenho: menor no celular, para o texto do SVG não encolher demais ao caber na tela
 let SC = { w: 640, h: 380, l: 58, r: 18, t: 16, b: 48 };
 function renderScatter() {
@@ -1734,6 +1795,12 @@ function renderScatter() {
   }
   // pontos (≥ 10 px, anel da cor do fundo para separar sobreposições) e rótulos agrupados por coordenada
   const groups = groupCoincident(pts), many = pts.length > 24;
+  // cor por categoria (paleta validada, ordem fixa; excedentes e vazios em "outros")
+  const catOf = id => (scatterColor === 'label' ? byId.get(id).label : scatterColor === 'type' ? R.per[id].type : null);
+  const cats = scatterColor === 'single' ? null : categoryColors(model.nodes.map(n => catOf(n.id)));
+  const colorOf = id => (!cats ? C.accent : cats.color.get(catOf(id)) || OTHER_COLOR);
+  const anySel = pts.some(q => selSet.has(q.id));
+  scatterGroups = groups.map(gp => ({ ids: gp.map(q => q.id), sx: X(gp[0].x), sy: Y(gp[0].y) }));
   // rótulos: à direita do ponto; perto da borda direita, à esquerda; pontos vizinhos na mesma coluna alternam o lado
   const side = new Map();
   const byCol = [...groups].sort((a, b) => X(a[0].x) - X(b[0].x) || Y(a[0].y) - Y(b[0].y));
@@ -1745,11 +1812,11 @@ function renderScatter() {
   });
   groups.forEach(gp => {
     const p = gp[0], sel = gp.some(q => selSet.has(q.id)), isRoot = gp.some(q => q.id === model.root);
-    const g = Eo('g', { class: 'scpt', transform: `translate(${X(p.x)},${Y(p.y)})` });
+    const g = Eo('g', { class: 'scpt', transform: `translate(${X(p.x)},${Y(p.y)})`, opacity: anySel && !sel ? 0.35 : 1 });
     g.dataset.ids = gp.map(q => q.id).join('\u0000');
     g.appendChild(Eo('circle', { r: 14, fill: 'transparent' }));
     if (sel) g.appendChild(Eo('circle', { r: 10, fill: 'none', stroke: C.accent, 'stroke-width': 2, 'stroke-opacity': 0.6 }));
-    g.appendChild(Eo('circle', { r: sel ? 6.5 : 5.5, fill: C.accent, stroke: C.panel, 'stroke-width': 2 }));
+    g.appendChild(Eo('circle', { r: sel ? 6.5 : 5.5, fill: colorOf(p.id), stroke: C.panel, 'stroke-width': 2 }));
     if (isRoot) g.appendChild(Eo('circle', { r: 8.5, fill: 'none', stroke: C.accent, 'stroke-width': 1.3 }));
     if (!many || sel) {
       const onLeft = side.get(gp);
@@ -1765,6 +1832,11 @@ function renderScatter() {
   if (left) note += ' ' + t('scatter.excluded', { n: left });
   $('scatterNote').textContent = note;
   svg.dataset.fx = kx; svg.dataset.fy = ky;
+  // legenda (só com mais de uma cor): a identidade nunca depende só da cor — os ids continuam rotulados
+  const leg = $('scatterLegend');
+  leg.innerHTML = cats ? [...cats.color].map(([k, c]) => `<span><i style="background:${c}"></i>${esc(scatterColor === 'type' ? t('type') + ' ' + k : k)}</span>`).join('') +
+    (cats.others ? `<span><i style="background:${OTHER_COLOR}"></i>${esc(t(scatterColor === 'label' ? 'scatter.otherLabel' : 'scatter.other'))}</span>` : '') : '';
+  $('scatterColorSel').value = scatterColor;
 }
 function scatterTip(e) {
   const g = e.target.closest('.scpt');
@@ -1775,13 +1847,44 @@ function scatterTip(e) {
 }
 $('scatterSvg').addEventListener('pointermove', scatterTip);
 $('scatterSvg').addEventListener('pointerleave', hideTip);
-$('scatterSvg').addEventListener('click', e => {
-  const g = e.target.closest('.scpt');
-  if (!g) return;
-  const id = g.dataset.ids.split('\u0000')[0];
-  selSet.clear(); selSet.add(id); refreshSel(); renderGraph(); renderJ();
-  openSheet({ kind: 'node', id });
+let scBox = null;
+const scPoint = e => { const m = $('scatterSvg').getScreenCTM().inverse(), p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m); return { x: p.x, y: p.y }; };
+/** Aplica a seleção feita no gráfico ao mapa, ao j-graph e à lista (a mesma seleção do app inteiro). */
+function scatterSelect(ids, add) {
+  if (!add) selSet.clear();
+  ids.forEach(id => { if (add && selSet.has(id) && ids.length === 1) selSet.delete(id); else selSet.add(id); });
+  refreshSel(); renderGraph(); renderJ();
+  if (selSet.size === 1 && !add) openSheet({ kind: 'node', id: [...selSet][0] });
+  else closeSheet();
+}
+$('scatterSvg').addEventListener('pointerdown', e => {
+  if (e.button === 2) return;
+  scBox = { ...scPoint(e), cx: e.clientX, cy: e.clientY, add: e.shiftKey, hit: e.target.closest('.scpt'), drag: e.pointerType !== 'touch', moved: false, el: null };
+  if (scBox.drag) try { $('scatterSvg').setPointerCapture(e.pointerId); } catch (_) { /* ponteiro já liberado */ }
 });
+$('scatterSvg').addEventListener('pointermove', e => {
+  if (!scBox || !scBox.drag) return;
+  if (!scBox.moved && Math.hypot(e.clientX - scBox.cx, e.clientY - scBox.cy) > 4) {
+    scBox.moved = true;
+    scBox.el = Eo('rect', { fill: 'rgba(178,58,46,.08)', stroke: C.accent, 'stroke-width': 1, 'stroke-dasharray': '4 3', 'pointer-events': 'none' });
+    $('scatterSvg').appendChild(scBox.el);
+  }
+  if (scBox.el) {
+    const p = scPoint(e);
+    scBox.el.setAttribute('x', Math.min(p.x, scBox.x)); scBox.el.setAttribute('y', Math.min(p.y, scBox.y));
+    scBox.el.setAttribute('width', Math.abs(p.x - scBox.x)); scBox.el.setAttribute('height', Math.abs(p.y - scBox.y));
+  }
+});
+$('scatterSvg').addEventListener('pointerup', e => {
+  const b = scBox; scBox = null;
+  if (!b) return;
+  if (b.moved) {
+    const p = scPoint(e), x0 = Math.min(p.x, b.x), x1 = Math.max(p.x, b.x), y0 = Math.min(p.y, b.y), y1 = Math.max(p.y, b.y);
+    scatterSelect(scatterGroups.filter(g => g.sx >= x0 && g.sx <= x1 && g.sy >= y0 && g.sy <= y1).flatMap(g => g.ids), b.add);
+  } else if (b.hit) scatterSelect(b.hit.dataset.ids.split('\u0000'), b.add);
+  else if (!b.add && selSet.size) scatterSelect([], false);
+});
+$('scatterColorSel').addEventListener('change', e => { scatterColor = e.target.value; renderScatter(); autosave(); });
 $('scatterXSel').addEventListener('change', e => { scatterX = e.target.value; renderScatter(); autosave(); });
 $('scatterYSel').addEventListener('change', e => { scatterY = e.target.value; renderScatter(); autosave(); });
 $('scatterSwap').addEventListener('click', () => { [scatterX, scatterY] = [scatterY, scatterX]; renderScatter(); autosave(); });
@@ -1935,7 +2038,15 @@ $('exCopy').addEventListener('click', () => {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(s).then(() => toast(t('toast.copied'))).catch(() => putIO(s, 'CSV'));
   else putIO(s, 'CSV');
 });
-$('exPrint').addEventListener('click', () => { setView('results'); setTimeout(() => window.print(), 150); });
+$('exPrint').addEventListener('click', printReport);
+$('cmpExport').addEventListener('click', () => {
+  const table = $('compareBox').querySelector('table');
+  if (!table) { toast(t('cmp.noTable')); return; }
+  const rows = [...table.rows].map(r => [...r.cells].map(c => c.textContent.replace(/[▲▼]/g, '').replace(/\s+/g, ' ').trim()));
+  const s = toCSV(rows);
+  download(s, `comparacao_${cmpView}.csv`, 'text/csv');
+  putIO(s, 'CSV');
+});
 $('btnExport').addEventListener('click', () => { const j = JSON.stringify(project, null, 2); download(j, 'space-syntax-project.json', 'application/json'); putIO(j, 'JSON'); });
 $('btnLoad').addEventListener('click', () => {
   const w = $('ioWarn');

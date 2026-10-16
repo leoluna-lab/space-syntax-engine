@@ -330,6 +330,31 @@ input.calib { width: 6rem; min-height: 32px; background: var(--paper); }
 .checklist .ok { color: var(--ok); list-style: none; margin-left: -1.1rem; }
 #grpExemplar summary .linkish { min-height: 0; font-size: .8rem; letter-spacing: 0; }
 
+/* ---------- dispersão: legenda e seleção ---------- */
+.scatter-legend { display: flex; flex-wrap: wrap; gap: .3rem .8rem; font-size: .74rem; color: var(--ink2); margin: .2rem 0; }
+.scatter-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: .3rem; vertical-align: -1px; border: 1px solid rgba(0, 0, 0, .25); }
+
+/* ---------- relatório / prancha ---------- */
+.report { display: none; }
+@media print {
+  body.printing-report > *:not(#report) { display: none !important; }
+  body.printing-report #report { display: block !important; }
+  @page { size: A4; margin: 12mm; }
+  .report { font-size: 10.5pt; color: #000; }
+  .report h1 { font-family: var(--serif); font-size: 18pt; margin: 0; }
+  .report h2 { font-family: var(--serif); font-size: 13pt; margin: 10pt 0 4pt; border-bottom: 1px solid #999; }
+  .report .rep-head p { margin: 2pt 0 6pt; color: #444; }
+  .rep-ficha { display: grid; grid-template-columns: max-content 1fr; gap: 1pt 10pt; margin: 0; font-size: 9.5pt; }
+  .rep-ficha dt { font-weight: 600; } .rep-ficha dd { margin: 0; }
+  .rep-figs { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; break-inside: avoid; }
+  .rep-figs figure { margin: 0; } .rep-figs svg { width: 100%; height: auto; max-height: 90mm; border: 1px solid #ccc; }
+  .rep-figs figcaption { font-size: 8.5pt; color: #333; margin-top: 2pt; }
+  .report .cards { grid-template-columns: repeat(4, 1fr); }
+  .report .valbox, .report table, .report .scatterbox { break-inside: avoid; }
+  .report svg.scatter { max-height: 85mm; }
+  .report table { font-size: 8pt; } .report th { position: static; }
+}
+
 /* ---------- diagnóstico ---------- */
 .diag-read { margin: .2rem 0 .5rem; padding-left: 1.1rem; font-size: .86rem; color: var(--ink); line-height: 1.5; }
 .diag-q { width: auto; min-width: 16rem; font-size: .8rem; }
