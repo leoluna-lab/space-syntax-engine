@@ -330,6 +330,15 @@ input.calib { width: 6rem; min-height: 32px; background: var(--paper); }
 .checklist .ok { color: var(--ok); list-style: none; margin-left: -1.1rem; }
 #grpExemplar summary .linkish { min-height: 0; font-size: .8rem; letter-spacing: 0; }
 
+/* ---------- diagnóstico ---------- */
+.diag-read { margin: .2rem 0 .5rem; padding-left: 1.1rem; font-size: .86rem; color: var(--ink); line-height: 1.5; }
+.diag-q { width: auto; min-width: 16rem; font-size: .8rem; }
+.diag-q th, .diag-q td { text-align: left; padding: .35rem .6rem; }
+.diag-q thead th { background: var(--panel); color: var(--ink2); text-transform: none; letter-spacing: 0; position: static; }
+.diag-q tbody th { background: var(--panel); color: var(--ink2); font-weight: 600; text-transform: none; letter-spacing: 0; position: static; }
+.diag-q small { color: var(--muted); }
+.diag-q th, .diag-q .linkish { font-family: var(--sans); font-size: .8rem; font-weight: 600; min-height: 0; }
+
 /* ---------- dispersão ---------- */
 .scatter-ctrl { display: flex; align-items: flex-end; gap: .4rem; flex-wrap: wrap; margin: .2rem 0 .4rem; }
 .scatter-ctrl label { display: flex; flex-direction: column; gap: .15rem; flex: 1; min-width: 9rem; font-family: var(--mono); font-size: .64rem; color: var(--muted); }

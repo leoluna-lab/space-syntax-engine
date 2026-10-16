@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, SYNTACTIC_LAYER, syntacticInput, jgraphLayout, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, SYNTACTIC_LAYER, syntacticInput, jgraphLayout, diagnose, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -1158,6 +1158,7 @@ function renderSheet() {
       </div>
       <div class="sheet-type">${isRoot ? `<span class="badge">${esc(t('root.badge'))}</span>` : ''}${n.exterior && researchMode ? `<span class="badge ext">${esc(t('badge.ext'))}</span>` : ''}
         <button class="linkish" data-info="type">${esc(t('type'))} <b>${p.type}</b> — ${esc(t('type.' + p.type))}</button></div>
+      ${diagLine(n.id)}
       <label class="labelrow"><span>${esc(t('label'))}</span><input type="text" id="sheetLabel" list="labelOptions" value="${esc(n.label || '')}" maxlength="60" placeholder="${esc(t('label.ph'))}" autocomplete="off"></label>
       ${facesLine(n.id)}
       <div class="mgrid">${rows}</div>
@@ -1353,6 +1354,7 @@ function renderResults() {
       <span class="sub">${n.label ? esc(n.label) + ' · ' : ''}${esc(t('type'))} ${p.type} · ${esc(t('col.integ'))} ${fmt3(p.integ)} · ${esc(t('col.choice'))} ${fmt1(p.choice)} · ${esc(t('col.depth'))} ${fmtInt(p.depth)}</span>
     </button>`;
   }).join('');
+  renderDiagnosis();
   renderScatter();
   renderFunctional();
   renderOrientation();
@@ -1412,6 +1414,31 @@ function renderOrientation() {
     <div class="tablewrap" style="display:block;margin-top:.5rem"><table><thead><tr><th class="name">${esc(t('orient.byFace'))}</th>${['opaco', 'vista', 'acesso', 'aberto'].map(k => `<th>${esc(t('kind.' + k))}</th>`).join('')}</tr></thead><tbody>${byFace}</tbody></table></div>` : ''}`;
 }
 $('orientBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
+/* ---------------- DIAGNÓSTICO CONFIGURACIONAL (H&H 1984, cap. 4) ---------------- */
+function renderDiagnosis() {
+  const box = $('diagBox'), D = diagnose(syntacticInput(model), R);
+  box.hidden = !D.L;
+  if (!D.L) return;
+  const pct = n => Math.round((100 * n) / D.L);
+  const cell = q => `<td><b>${D.counts[q]}</b> <small>${pct(D.counts[q])}%</small></td>`;
+  const rootName = model.root && byId.get(model.root) ? `${model.root} · ${byId.get(model.root).name}` : '—';
+  box.innerHTML = `<h4>${esc(t('diag.title'))} <button class="linkish" data-info="diagnosis">ⓘ</button></h4>
+    <p class="hint" style="margin:0 0 .3rem">${esc(t('diag.relativeTo', { root: rootName }))}</p>
+    <ul class="diag-read">${D.readings.map(r => `<li>${esc(t('diag.r.' + r.code, r))}</li>`).join('')}</ul>
+    <table class="diag-q"><thead><tr><th></th>
+      <th><button class="linkish" data-info="distribution">${esc(t('diag.dist'))}</button></th><th>${esc(t('diag.nondist'))}</th></tr></thead>
+      <tbody><tr><th><button class="linkish" data-info="symmetry">${esc(t('diag.sym'))}</button></th>${cell('sd')}${cell('sn')}</tr>
+      <tr><th>${esc(t('diag.asym'))}</th>${cell('ad')}${cell('an')}</tr></tbody></table>
+    <p class="hint">${esc(t('diag.links', { n: D.L }))} ${esc(t('diag.interp'))}</p>`;
+}
+/** Linha do painel do espaço: distribuição e simetria em relação à raiz. */
+function diagLine(id) {
+  const s = diagnose(syntacticInput(model), R).spaces[id];
+  if (!s || s.distributed === null) return '';
+  const sym = s.symmetricWith.length ? t('diag.sSymWith', { ids: s.symmetricWith.join(', ') }) : t('diag.sAsym');
+  return `<button class="linkish faces" data-info="diagnosis">${esc(t('diag.space', { dist: t(s.distributed ? 'diag.sDist' : 'diag.sNondist'), sym }))}</button>`;
+}
+$('diagBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('funcBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('globalCards').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('sortSel').addEventListener('change', e => { sortKey = e.target.value; sortDir = isTextKey(sortKey) ? 1 : -1; renderResults(); });
