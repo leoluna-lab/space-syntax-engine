@@ -34,7 +34,7 @@
 <div class="app">
   <header class="appbar">
     <div class="brand">Space Syntax Engine<small data-i18n="brand.sub"></small></div>
-    <span class="modebadge research-only" data-i18n="mode.research"></span>
+    <span class="modebadge research-only" id="modeBadge" data-i18n="mode.research"></span>
     <select id="scnSel" class="scnsel" data-i18n-aria="scn.select"></select>
     <nav class="toptabs" role="tablist">
       <button class="tab" role="tab" data-view="graph" data-i18n="tab.graph"></button>
@@ -55,6 +55,7 @@
       <div class="seg modeseg" role="group">
         <button data-mode-btn="simple" aria-pressed="true" data-i18n="mode.simple"></button>
         <button data-mode-btn="research" aria-pressed="false" data-i18n="mode.research"></button>
+        <button data-mode-btn="poiesis" aria-pressed="false" data-i18n="mode.poiesis"></button>
       </div>
       <p class="hint" data-i18n="hint.mode"></p>
     </details>
@@ -212,7 +213,7 @@
 
     <section class="view" id="view-jgraph" role="tabpanel">
       <div class="canvaswrap"><svg class="graph" id="svgJ" viewBox="0 0 760 480" preserveAspectRatio="xMidYMid meet"></svg></div>
-      <p class="foot" data-i18n="help.jgraph"></p>
+      <p class="foot" id="jFoot" data-i18n="help.jgraph"></p>
     </section>
 
     <section class="view" id="view-results" role="tabpanel">
@@ -235,7 +236,7 @@
       </div>
       <div class="valbox funcbox" id="funcBox"></div>
       <div class="valbox funcbox" id="orientBox" hidden></div>
-      <label class="sortbar"><span data-i18n="sortBy"></span><select id="sortSel"></select></label>
+      <div class="sortbar"><label><span data-i18n="sortBy"></span><select id="sortSel"></select></label><button class="ghost sortdir" id="sortDir" type="button"></button></div>
       <div class="tablewrap"><table id="resTable"><thead></thead><tbody></tbody></table></div>
       <div class="spacecards" id="spaceCards"></div>
       <p class="foot" id="methodFoot"></p>
@@ -249,6 +250,8 @@
           <button role="tab" data-cv="table" data-i18n="cv.table"></button>
           <button role="tab" data-cv="delta" data-i18n="cv.delta"></button>
           <button role="tab" data-cv="jgraph" data-i18n="cv.jgraph"></button>
+          <button role="tab" data-cv="models" id="cvModels" data-i18n="cv.models" hidden></button>
+          <button role="tab" data-cv="states" id="cvStates" data-i18n="cv.states" hidden></button>
         </div>
         <label class="measure-pick"><span data-i18n="colourBy"></span><select id="cmpMeasure"></select></label>
       </div>

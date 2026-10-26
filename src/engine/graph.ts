@@ -12,27 +12,32 @@ export interface Graph {
   targets: Int32Array;
   /** nº de arestas (sem laços nem duplicatas) */
   m: number;
+  /** custo de cada ligação, paralelo a `targets`; ausente = todas valem 1 passo (grafo topológico) */
+  cost?: Float64Array;
 }
 
-export function buildGraph(ids: string[], edges: [string, string][]): Graph {
+/** `costs` (paralelo a `edges`): custo de cada passo; em par repetido vale o menor. Sem `costs` = grafo topológico. */
+export function buildGraph(ids: string[], edges: [string, string][], costs?: number[]): Graph {
   const n = ids.length;
   const index = new Map<string, number>();
   ids.forEach((id, i) => index.set(id, i));
-  const adj: Set<number>[] = ids.map(() => new Set<number>());
-  for (const [a, b] of edges) {
+  const adj: Map<number, number>[] = ids.map(() => new Map<number, number>());
+  edges.forEach(([a, b], e) => {
     const i = index.get(a), j = index.get(b);
-    if (i === undefined || j === undefined || i === j) continue;
-    adj[i].add(j);
-    adj[j].add(i);
-  }
+    if (i === undefined || j === undefined || i === j) return;
+    const c = Math.min(costs ? costs[e] : 1, adj[i].get(j) ?? Infinity);
+    adj[i].set(j, c);
+    adj[j].set(i, c);
+  });
   const offsets = new Int32Array(n + 1);
   for (let v = 0; v < n; v++) offsets[v + 1] = offsets[v] + adj[v].size;
   const targets = new Int32Array(offsets[n]);
+  const cost = costs ? new Float64Array(offsets[n]) : undefined;
   for (let v = 0; v < n; v++) {
     let p = offsets[v];
-    for (const w of adj[v]) targets[p++] = w;
+    for (const [w, c] of adj[v]) { if (cost) cost[p] = c; targets[p++] = w; }
   }
-  return { n, ids, index, offsets, targets, m: offsets[n] / 2 };
+  return { n, ids, index, offsets, targets, m: offsets[n] / 2, cost };
 }
 
 export const degree = (g: Graph, v: number): number => g.offsets[v + 1] - g.offsets[v];
@@ -54,6 +59,24 @@ export function bfs(g: Graph, s: number): Int32Array {
       }
     }
   }
+  return d;
+}
+
+/** Distâncias ponderadas (Dijkstra, O(n²) — basta para mapas convexos) a partir de s; -1 = inalcançável. */
+export function dijkstra(g: Graph, s: number): Float64Array {
+  const d = new Float64Array(g.n).fill(Infinity), done = new Uint8Array(g.n);
+  d[s] = 0;
+  for (;;) {
+    let v = -1;
+    for (let u = 0; u < g.n; u++) if (!done[u] && d[u] < Infinity && (v < 0 || d[u] < d[v])) v = u;
+    if (v < 0) break;
+    done[v] = 1;
+    for (let p = g.offsets[v]; p < g.offsets[v + 1]; p++) {
+      const w = g.targets[p], nd = d[v] + (g.cost ? g.cost[p] : 1);
+      if (nd < d[w]) d[w] = nd;
+    }
+  }
+  for (let u = 0; u < g.n; u++) if (d[u] === Infinity) d[u] = -1;
   return d;
 }
 
@@ -106,6 +129,30 @@ export function brandes(g: Graph, radius = 0): Float64Array {
     }
     while (sp > 0) {
       const w = S[--sp];
+      for (const v of preds[w]) delta[v] += (sigma[v] / sigma[w]) * (1 + delta[w]);
+      if (w !== s) CB[w] += delta[w];
+    }
+  }
+  for (let v = 0; v < n; v++) CB[v] /= 2;
+  return CB;
+}
+
+const EPS = 1e-9;
+/** Choice ponderado: Brandes sobre caminhos mínimos de custo (Dijkstra). radius > 0 limita o custo do caminho. */
+export function brandesWeighted(g: Graph, radius = 0): Float64Array {
+  const { n, offsets, targets } = g;
+  const CB = new Float64Array(n);
+  for (let s = 0; s < n; s++) {
+    const d = dijkstra(g, s), sigma = new Float64Array(n), delta = new Float64Array(n);
+    const preds: number[][] = Array.from({ length: n }, () => []);
+    const order = [...Array(n).keys()].filter(v => d[v] >= 0 && (radius <= 0 || d[v] <= radius + EPS)).sort((a, b) => d[a] - d[b]);
+    sigma[s] = 1;
+    for (const v of order) for (let p = offsets[v]; p < offsets[v + 1]; p++) {
+      const w = targets[p];
+      if (Math.abs(d[v] + g.cost![p] - d[w]) < EPS && (radius <= 0 || d[w] <= radius + EPS)) { sigma[w] += sigma[v]; preds[w].push(v); }
+    }
+    for (let i = order.length - 1; i >= 0; i--) {
+      const w = order[i];
       for (const v of preds[w]) delta[v] += (sigma[v] / sigma[w]) * (1 + delta[w]);
       if (w !== s) CB[w] += delta[w];
     }

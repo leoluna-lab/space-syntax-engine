@@ -97,3 +97,25 @@ export const SYNTACTIC_LAYER: Layer = 'acesso';
 export function syntacticInput(model: Pick<Model, 'nodes' | 'edges' | 'root'>): AnalysisInput {
   return layerInput(model, SYNTACTIC_LAYER);
 }
+
+/**
+ * Modelo Poiesis13 (análise com relações ponderadas, sem a classe opaco).
+ * O peso é a FORÇA da relação — quão integrada ela é: opaco não integra (0) < janela/vista < acesso < aberto.
+ * Cada passo custa 1/peso: aberto ≈ 0,67, acesso = 1, vista = 2; peso 0 = sem ligação.
+ * Com TRADITIONAL_WEIGHTS (1, 1, 0) o resultado é o grafo de permeabilidade clássico.
+ */
+export type Weights = Record<EdgeKind, number>;
+export const POIESIS13_WEIGHTS: Weights = { opaco: 0, vista: 0.5, acesso: 1, aberto: 1.5 };
+export const TRADITIONAL_WEIGHTS: Weights = { opaco: 0, vista: 0, acesso: 1, aberto: 1 };
+
+/** Entrada ponderada para `analyse()`; par repetido (faces do exterior) vale a relação mais forte. `kinds` = classe de cada par. */
+export function weightedInput(model: Pick<Model, 'nodes' | 'edges' | 'root'>, w: Weights = POIESIS13_WEIGHTS): AnalysisInput & { kinds: EdgeKind[] } {
+  const best = new Map<string, Edge>();
+  for (const e of model.edges) {
+    if (!(w[e.kind] > 0)) continue;
+    const k = e.a < e.b ? `${e.a}\u0000${e.b}` : `${e.b}\u0000${e.a}`, cur = best.get(k);
+    if (!cur || w[e.kind] > w[cur.kind]) best.set(k, e);
+  }
+  const es = [...best.values()];
+  return { nodes: model.nodes, root: model.root, edges: es.map(e => [e.a, e.b]), costs: es.map(e => 1 / w[e.kind]), kinds: es.map(e => e.kind) };
+}

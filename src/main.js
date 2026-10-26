@@ -1,4 +1,4 @@
-import { analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, SYNTACTIC_LAYER, syntacticInput, jgraphLayout, diagnose, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
+import { POIESIS13_WEIGHTS, weightedInput, analyse as runAnalysis, migrateModel, migrateModelWithReport, edgeKey, EDGE_KINDS, layerInput, layerKinds, orientation, FACES, SYNTACTIC_LAYER, syntacticInput, jgraphLayout, diagnose, CONJUNTOS, exemplarChecklist, manifestCSV, exemplarFileName, migrateProject, newScenarioId, matchSpaces, functionalSummary, ranks, MAX_SCENARIOS, DEFAULT_OPTIONS } from './engine/index.ts';
 import { escapeHtml as esc } from './util/html.ts';
 import { t, getLang, setLang, applyI18n } from './i18n.js';
 import { GLOSSARY } from './glossary.js';
@@ -56,6 +56,9 @@ const findEdge = key => model.edges.find(e => edgeKey(e) === key);
 // Modo Simples (padrão) = o grafo de permeabilidade de sempre: só a camada acesso, sem tipos, faces nem camadas na tela.
 // Modo Pesquisa = interfaces tipadas, camadas e orientação NSLO. Os dados são os mesmos; muda o que se vê e se analisa.
 let researchMode = false;
+// Modo Poiesis13 (liga também researchMode): sem opaco; relações ponderadas acesso=1, aberto=1,5, janela(vista)=0,5,
+// cada passo custa 1/peso. Mostra lado a lado a integração tradicional (acesso=aberto=1, janela=0).
+let poiesis = false;
 // Detecção de vizinhança (F4.3.3): tolerâncias em cm, convertidas pela escala do desenho (geo).
 let tolCm = 15, minContactCm = 30;
 let review = null; // { cands, sel: Set<chave do par>, focus } enquanto a revisão está aberta
@@ -85,15 +88,31 @@ const kindSwatch = k => `<svg class="kindsw" viewBox="0 0 44 12" aria-hidden="tr
 // opaco e vista ficam registradas (e na orientação), mas fora do cálculo — ver syntacticInput no motor.
 const PASSAGE = layerKinds(SYNTACTIC_LAYER);
 const inLayer = e => PASSAGE.has(e.kind);
-const pairsOf = m => syntacticInput(m).edges;
-function analyse(m, r = radius) { return runAnalysis(syntacticInput(m), { ...conv, radius: r }); }
+const inputOf = m => (poiesis ? weightedInput(m) : syntacticInput(m));
+const pairsOf = m => inputOf(m).edges;
+function analyse(m, r = radius) { return runAnalysis(inputOf(m), { ...conv, radius: r }); }
+const analyseTrad = m => runAnalysis(syntacticInput(m), { ...conv, radius });
+/** Ligação aparece na tela? Simples: só passagens; Pesquisa: todas; Poiesis13: todas menos opaco. */
+const shownEdge = e => (poiesis ? POIESIS13_WEIGHTS[e.kind] > 0 : researchMode || inLayer(e));
+/** Ligação entra no cálculo? (traço forte no mapa) */
+const counted = e => (poiesis ? POIESIS13_WEIGHTS[e.kind] > 0 : inLayer(e));
+const kindsShown = () => (poiesis ? EDGE_KINDS.filter(k => POIESIS13_WEIGHTS[k] > 0) : EDGE_KINDS);
+let RT = null; // análise tradicional, só no Poiesis13
 /** O modelo tem informação que só o modo Pesquisa mostra? (o exterior marcado sozinho não conta) */
 const hasResearchData = m => m.edges.some(e => e.kind !== 'acesso' || e.face);
-function setResearchMode(on) {
-  researchMode = !!on;
+const modeName = () => (poiesis ? 'poiesis' : researchMode ? 'research' : 'simple');
+function paintMode() {
   document.body.classList.toggle('research', researchMode);
-  document.querySelectorAll('[data-mode-btn]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.modeBtn === 'research') === researchMode)));
-  if (!researchMode && selEdge && !inLayer(findEdge(selEdge) || {})) selEdge = null;
+  document.body.classList.toggle('poiesis', poiesis);
+  // selo e legenda do j-graph mudam no Poiesis13 (data-i18n mantém a troca de idioma)
+  [['modeBadge', poiesis ? 'mode.poiesis' : 'mode.research'], ['jFoot', poiesis ? 'help.jgraphP' : 'help.jgraph']].forEach(([id, k]) => { $(id).dataset.i18n = k; $(id).textContent = t(k); });
+  document.querySelectorAll('[data-mode-btn]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.modeBtn === modeName())));
+}
+function setResearchMode(on, p = false) {
+  researchMode = !!on || p; poiesis = p;
+  if (!kindsShown().includes(linkKind)) linkKind = 'acesso';
+  paintMode();
+  if (selEdge && !shownEdge(findEdge(selEdge) || {})) selEdge = null;
   recompute();
 }
 /** No modo Simples, avisa que o modelo tem dados de pesquisa escondidos (nada se perde). */
@@ -114,7 +133,7 @@ function autosave() {
   try {
     localStorage.setItem('ssx_project', JSON.stringify(project));
     localStorage.setItem('ssx_state', JSON.stringify({
-      currentMeasure, showValues, snap, radius, conv, projector, researchMode, tolCm, minContactCm, scatterX, scatterY, scatterColor,
+      currentMeasure, showValues, snap, radius, conv, projector, researchMode, poiesis, tolCm, minContactCm, scatterX, scatterY, scatterColor,
       bg: { op: bg.op, rot: bg.rot, scale: bg.scale, dx: bg.dx, dy: bg.dy },
     }));
   } catch (_) { /* cota cheia ou armazenamento bloqueado */ }
@@ -134,7 +153,7 @@ function loadSaved() {
       currentMeasure = o.currentMeasure || 'integ';
       showValues = !!o.showValues; snap = !!o.snap; radius = o.radius || 0; projector = !!o.projector;
       if (o.conv) conv = Object.assign(conv, o.conv);
-      researchMode = !!o.researchMode;
+      researchMode = !!o.researchMode; poiesis = !!o.poiesis;
       if (SCATTER_KEYS.includes(o.scatterX)) scatterX = o.scatterX;
       if (SCATTER_KEYS.includes(o.scatterY)) scatterY = o.scatterY;
       if (['single', 'label', 'type'].includes(o.scatterColor)) scatterColor = o.scatterColor;
@@ -154,7 +173,10 @@ function loadSaved() {
 const fmt3 = v => (v == null || !isFinite(v) ? '—' : (+v).toFixed(3));
 const fmt1 = v => (v == null || !isFinite(v) ? '—' : (+v).toFixed(1));
 const fmtInt = v => (v == null || !isFinite(v) ? '—' : String(v));
-const FMT = { integ: fmt3, choice: fmt1, ctrl: fmt3, controllability: fmt3, conn: fmtInt, focus: fmtInt, depth: fmtInt, md: fmt3, rra: fmt3, ra: fmt3, td: fmtInt, ent: fmt3 };
+/** Profundidade: inteira no modelo topológico; com 2 casas no Poiesis13 (custos fracionários). */
+const fmtDepth = v => (v == null || !isFinite(v) ? '—' : Number.isInteger(v) ? String(v) : (+v).toFixed(2));
+const fmtDelta = v => (v == null || !isFinite(v) ? '—' : (v > 0 ? '+' : '') + (+v).toFixed(3));
+const FMT = { integ: fmt3, integT: fmt3, dInteg: fmtDelta, choice: fmt1, ctrl: fmt3, controllability: fmt3, conn: fmtInt, focus: fmtInt, depth: fmtDepth, md: fmt3, rra: fmt3, ra: fmt3, td: fmtDepth, ent: fmt3 };
 const MEASURES = [
   { key: 'integ' }, { key: 'choice' }, { key: 'ctrl' }, { key: 'controllability' }, { key: 'conn' },
   { key: 'focus', invert: true }, { key: 'depth', invert: true }, { key: 'md', invert: true }, { key: 'rra', invert: true }, { key: 'ent', invert: true },
@@ -198,6 +220,7 @@ function recompute() {
   if (selEdge && !findEdge(selEdge)) selEdge = null;
   if (linkFrom && !byId.has(linkFrom)) linkFrom = null;
   R = analyse(model);
+  RT = poiesis ? analyseTrad(model) : null;
   if (review) refreshReview();
   if (faceRev) refreshFaces();
   renderAll();
@@ -227,7 +250,7 @@ function renderPanel() {
       <button class="danger" data-del="${esc(n.id)}" aria-label="${esc(t('btn.delete'))}">×</button>
     </div>`).join('');
   $('nCount').textContent = '(' + model.nodes.length + ')';
-  const shown = model.edges.map((e, i) => [e, i]).filter(([e]) => researchMode || inLayer(e));
+  const shown = model.edges.map((e, i) => [e, i]).filter(([e]) => shownEdge(e));
   $('eCount').textContent = '(' + shown.length + ')';
   $('edgeList').innerHTML = shown.map(([e, i]) => `
     <div class="li${selEdge === edgeKey(e) ? ' sel' : ''}">
@@ -239,8 +262,9 @@ function renderPanel() {
   ms.innerHTML = MEASURES.map(m => `<option value="${m.key}">${esc(t('m.' + m.key))}</option>`).join('');
   ms.value = currentMeasure;
   const ss = $('sortSel');
-  ss.innerHTML = COLS.map(k => `<option value="${k}">${esc(colLabelLong(k))}</option>`).join('');
+  ss.innerHTML = cols().map(k => `<option value="${k}">${esc(colLabelLong(k))}</option>`).join('');
   ss.value = sortKey;
+  $('sortDir').textContent = dirBtn(sortDir); $('sortDir').title = $('sortDir').ariaLabel = dirLabel(sortDir);
   $('optSnap').checked = snap; $('optValues').checked = showValues; $('optRadius').value = radius;
   $('optEntropy').value = conv.entropy; $('optHFactor').value = conv.differenceFactor;
   const sc = model.geo && model.geo.escala_m_por_unidade;
@@ -337,11 +361,11 @@ function renderGraph() {
     svgG.appendChild(pg); polyEls[n.id] = pg;
   });
   model.edges.forEach(e => {
-    if (!researchMode && !inLayer(e)) return;
+    if (!shownEdge(e)) return;
     const pa = byId.get(e.a), pb = byId.get(e.b), key = edgeKey(e), sel = selEdge === key;
     // Simples: o traço de sempre. Pesquisa: traço da categoria; fora da camada analisada fica claro.
     const lines = researchMode
-      ? kindLines(e.kind, pa.x, pa.y, pb.x, pb.y, inLayer(e) ? 0.85 : 0.3, sel ? 'seledge' : '')
+      ? kindLines(e.kind, pa.x, pa.y, pb.x, pb.y, counted(e) ? 0.85 : 0.3, sel ? 'seledge' : '')
       : [Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: C.wall, 'stroke-width': 1.6, 'stroke-opacity': 0.55, class: 'edge' + (sel ? ' seledge' : '') })];
     const hit = Eo('line', { x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, stroke: 'transparent', 'stroke-width': 12, class: 'edgehit' });
     hit.dataset.key = key;
@@ -596,7 +620,7 @@ function addNodeAt(x, y, name) {
 function addEdge(a, b) {
   if (!a || !b || a === b) return;
   const existing = model.edges.find(e => edgeKey(e) === edgeKey({ a, b }));
-  if (existing) { toast(!researchMode && !inLayer(existing) ? t('toast.linkHidden', { kind: t('kind.' + existing.kind) }) : t('toast.linkExists')); return; }
+  if (existing) { toast(!shownEdge(existing) ? t('toast.linkHidden', { kind: t('kind.' + existing.kind) }) : t('toast.linkExists')); return; }
   mutate(() => model.edges.push({ a, b, kind: researchMode ? linkKind : 'acesso' }));
 }
 /** Muda a categoria da ligação (modo Pesquisa). */
@@ -732,7 +756,7 @@ function renderCtx() {
   let html = '';
   if (mode === 'add') html = `<span>${t('ctx.add')}</span>`;
   else if (mode === 'link') html = `<span>${linkFrom ? t('ctx.link2', { id: esc(linkFrom) }) : t('ctx.link1')}</span>` +
-    (researchMode ? `<div class="kindpick inbar" role="radiogroup" aria-label="${esc(t('edge.kind'))}">${EDGE_KINDS.map(k => `<button data-ctx="linkKind" data-k="${k}" role="radio" aria-checked="${k === linkKind}" title="${esc(t('kind.' + k))}">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}</div>` : '') +
+    (researchMode ? `<div class="kindpick inbar" role="radiogroup" aria-label="${esc(t('edge.kind'))}">${kindsShown().map(k => `<button data-ctx="linkKind" data-k="${k}" role="radio" aria-checked="${k === linkKind}" title="${esc(t('kind.' + k))}">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}</div>` : '') +
     (linkFrom ? `<button data-ctx="cancelLink">${t('btn.cancel')}</button>` : '');
   else if (mode === 'measure') {
     const n = poly.pts.length;
@@ -814,7 +838,7 @@ function edgeEditor(e) {
   const ext = model.nodes.find(n => n.exterior);
   const touchesExt = ext && (e.a === ext.id || e.b === ext.id);
   return `<div class="kindpick" role="radiogroup" aria-label="${esc(t('edge.kind'))}">
-      ${EDGE_KINDS.map((k, i) => `<button data-act="setKind" data-k="${k}" role="radio" aria-checked="${e.kind === k}" title="${esc(t('kind.' + k))} (${i + 1})">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}
+      ${kindsShown().map((k, i) => `<button data-act="setKind" data-k="${k}" role="radio" aria-checked="${e.kind === k}" title="${esc(t('kind.' + k))} (${i + 1})">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('')}
     </div>
     <button class="linkish" data-info="layer">${esc(t('edge.kindHelp'))} ⓘ</button>
     ${touchesExt ? `<label class="labelrow"><span>${esc(t('edge.face'))}</span><select id="edgeFace">
@@ -831,6 +855,7 @@ const fmtLen = v => { const u = adjUnits(); return u.scaled ? `${Math.round(v * 
 const pairKey = (a, b) => (a < b ? a + '\u0000' + b : b + '\u0000' + a);
 const polyList = () => model.nodes.filter(n => n.poly && n.poly.length >= 3).map(n => ({ id: n.id, poly: n.poly }));
 /** Pares que já têm ligação (no modo Simples, só as de passagem contam). */
+// conta TODAS as ligações gravadas (inclusive opaco escondido no Poiesis13): a revisão nunca duplica um par
 const linkedPairs = () => new Set(model.edges.filter(e => researchMode || inLayer(e)).map(e => pairKey(e.a, e.b)));
 function detectNew() {
   const u = adjUnits(), linked = linkedPairs();
@@ -853,7 +878,7 @@ function refreshReview() {
   review.sel = new Set(cands.map(c => pairKey(c.a, c.b)).filter(k => keep.has(k)));
 }
 function reviewHTML(closeBtn) {
-  const u = adjUnits(), n = review.sel.size, kindNew = t('kind.' + (researchMode ? 'opaco' : 'acesso'));
+  const u = adjUnits(), n = review.sel.size, kindNew = t('kind.' + (researchMode && !poiesis ? 'opaco' : 'acesso'));
   const name = id => esc((byId.get(id) || { name: id }).name);
   let h = `<div class="sheet-handle"></div><div class="sheet-head"><h3>${esc(t('rev.title'))}</h3>${closeBtn}</div>
     <p class="hint">${esc(u.scaled ? t('rev.scaleInfo', { tol: tolCm, min: minContactCm }) : t('rev.noScale'))}${review.linked ? ' ' + esc(t('rev.linked', { n: review.linked })) : ''}</p>`;
@@ -911,11 +936,11 @@ function reviewWeld() {
 }
 /** Cria as ligações dos pares marcados: opaco no modo Pesquisa (para reclassificar), acesso no Simples. */
 function reviewCreate() {
-  const kind = researchMode ? 'opaco' : 'acesso';
+  const kind = researchMode && !poiesis ? 'opaco' : 'acesso'; // Poiesis13 não tem opaco
   const add = review.cands.filter(c => review.sel.has(pairKey(c.a, c.b))).map(c => ({ a: c.a, b: c.b, kind }));
   review = null; sheetFor = null;
   mutate(() => model.edges.push(...add));
-  toast(t('rev.created', { n: add.length, kind: t('kind.' + kind) }) + (researchMode ? t('rev.createdResearch') : ''), t('toast.undo'), undo);
+  toast(t('rev.created', { n: add.length, kind: t('kind.' + kind) }) + (researchMode && !poiesis ? t('rev.createdResearch') : ''), t('toast.undo'), undo);
 }
 /** Calibração: distância real (m) entre os dois pontos medidos → metros por unidade do desenho. */
 function applyCalibration() {
@@ -1132,7 +1157,7 @@ $('exInfo').addEventListener('click', e => { e.preventDefault(); openInfo('exemp
 function renderKindLegend() {
   const el = $('kindLegend');
   if (!el) return;
-  el.innerHTML = researchMode ? EDGE_KINDS.map(k => `<button class="kl" data-info="layer">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('') : '';
+  el.innerHTML = researchMode ? kindsShown().map(k => `<button class="kl" data-info="layer">${kindSwatch(k)}<span>${esc(t('kind.' + k))}</span></button>`).join('') : '';
 }
 $('kindLegend').addEventListener('click', e => { if (e.target.closest('[data-info]')) openInfo('layer'); });
 function renderSheet() {
@@ -1255,19 +1280,40 @@ $('infoDlg').addEventListener('click', e => {
 
 /* ---------------- GRAFO JUSTIFICADO ---------------- */
 /** Desenha o grafo justificado de `m` (resultado `Rx`) em `svg`. Usado na aba J-graph e na comparação. */
-function drawJGraph(svg, m, Rx, sel = new Set()) {
+const J = { gapY: 76, padTop: 44, padBottom: 52 }; // passados ao jgraphLayout: a moldura comum usa os mesmos valores
+const jInput = (m, classified) => (classified ? weightedInput(m) : syntacticInput(m));
+/**
+ * Moldura comum para j-graphs lado a lado: mesma base, mesmo passo entre níveis, mesmas réguas e mesma largura,
+ * para que o nível d de um fique na mesma altura do nível d do outro (percepção de profundidade).
+ * `list` = [[modelo, classificado?], ...].
+ */
+function jFrame(list) {
+  const lays = list.map(([m, c]) => jgraphLayout(m.nodes, jInput(m, c).edges, m.root, J));
+  const levels = Math.max(...lays.map(l => l.maxDepth)), band = lays.some(l => l.unreachable.length) ? 1 : 0;
+  return { W: Math.max(...lays.map(l => l.width)), H: J.padTop + J.padBottom + (levels + band) * J.gapY, levels };
+}
+/**
+ * `classified`: grafo das relações classificadas (Poiesis13, traço por classe) ou o clássico; `colour`: cor por indicador;
+ * `frame` (de jFrame): alinha os níveis com os outros j-graphs da comparação.
+ */
+function drawJGraph(svg, m, sel = new Set(), classified = poiesis, colour = null, frame = null) {
   svg.innerHTML = '';
   // Layout em árvore (motor: jgraphLayout): pai centrado sobre os filhos, filho único no mesmo eixo vertical,
   // sem espalhar cada nível pela largura; a árvore pode se espraiar e o desenho cresce com ela.
-  const pairs = pairsOf(m), lay = jgraphLayout(m.nodes, pairs, m.root);
-  const pj = lay.pos, W = lay.width;
-  svg.setAttribute('viewBox', `0 0 ${W} ${lay.height}`);
-  lay.levelY.forEach((y, d) => {
+  // o desenho nunca é ponderado: cada relação = um nível; os pesos só entram nos indicadores
+  const I = jInput(m, classified), pairs = I.edges, lay = jgraphLayout(m.nodes, pairs, m.root, J);
+  const W = frame ? frame.W : lay.width, H = frame ? frame.H : lay.height, dx = (W - lay.width) / 2, dy = H - lay.height;
+  // base comum: níveis contados de baixo; os inalcançáveis ficam na faixa do topo (fora das réguas)
+  const pj = Object.fromEntries(Object.entries(lay.pos).map(([id, p]) => [id, { x: p.x + dx, y: lay.depth[id] == null ? p.y : p.y + dy }]));
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  Array.from({ length: (frame ? frame.levels : lay.maxDepth) + 1 }, (_, d) => H - J.padBottom - d * J.gapY).forEach((y, d) => {
     svg.appendChild(Eo('line', { x1: 34, y1: y, x2: W - 14, y2: y, stroke: C.rule, 'stroke-width': 1, 'stroke-dasharray': '2 4' }));
     svg.appendChild(txt(16, y + 4, 'd' + d, 11, C.muted, null, 't-name'));
   });
-  pairs.forEach(([a, b]) => {
+  pairs.forEach(([a, b], i) => {
     if (!pj[a] || !pj[b]) return;
+    // Poiesis13: cada relação com o traço da sua classe (vista tracejada, aberto dupla)
+    if (classified) { kindLines(I.kinds[i], pj[a].x, pj[a].y, pj[b].x, pj[b].y, 0.9).forEach(el => svg.appendChild(el)); return; }
     // todas as permeabilidades com o mesmo traço (Hillier & Hanson): o anel aparece como circuito,
     // sem eleger arbitrariamente uma ligação "que fecha" — a árvore só define a posição dos nós
     svg.appendChild(Eo('line', { x1: pj[a].x, y1: pj[a].y, x2: pj[b].x, y2: pj[b].y, stroke: C.wall, 'stroke-width': 1.8, 'stroke-opacity': 0.9 }));
@@ -1276,7 +1322,7 @@ function drawJGraph(svg, m, Rx, sel = new Set()) {
   m.nodes.forEach(n => {
     const p = pj[n.id];
     if (!p) return;
-    const d = Rx.per[n.id].depth, col = d == null ? '#bdb6a6' : ramp[Math.min(d, ramp.length - 1)];
+    const d = lay.depth[n.id], col = colour ? colour(n.id) : d == null ? '#bdb6a6' : ramp[Math.min(d, ramp.length - 1)];
     const g = Eo('g', { class: 'node' + (sel.has(n.id) ? ' selnode' : ''), transform: `translate(${p.x},${p.y})` });
     g.dataset.id = n.id;
     g.appendChild(Eo('circle', { r: 24, fill: 'transparent', class: 'hit' }));
@@ -1286,12 +1332,12 @@ function drawJGraph(svg, m, Rx, sel = new Set()) {
       g.appendChild(Eo('line', { x1: -16, y1: 0, x2: 16, y2: 0, stroke: C.accent, 'stroke-width': 1.3 }));
       g.appendChild(Eo('line', { x1: 0, y1: -16, x2: 0, y2: 16, stroke: C.accent, 'stroke-width': 1.3 }));
     } else g.appendChild(Eo('circle', { r: 14, fill: col, stroke: C.wall, 'stroke-width': 1.4 }));
-    g.appendChild(txt(0, 4.5, n.id, 12, d != null && d >= 2 ? '#fff' : C.ink, '700', 't-id'));
+    g.appendChild(txt(0, 4.5, n.id, 12, colour ? labelInk(col) : d != null && d >= 2 ? '#fff' : C.ink, '700', 't-id'));
     if (showValues && d != null) g.appendChild(txt(0, -20, 'd' + d, 10, C.ink2, '700', 't-val'));
     svg.appendChild(g);
   });
 }
-function renderJ() { drawJGraph(svgJ, model, R, selSet); }
+function renderJ() { drawJGraph(svgJ, model, selSet); }
 svgJ.addEventListener('click', e => {
   const g = e.target.closest('.node');
   if (!g) { clearSelection(); renderJ(); return; }
@@ -1302,20 +1348,56 @@ svgJ.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') hover
 svgJ.addEventListener('pointerleave', hideTip);
 
 /* ---------------- RESULTADOS ---------------- */
-const COLS = ['id', 'label', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+/* Ordenação das tabelas de indicadores: cada tabela guarda o campo (k) e o sentido (dir 1 = crescente, -1 = decrescente). */
+const tblSort = { func: { k: 'integ', dir: -1 }, delta: { k: 'absd', dir: -1 }, models: { k: 'absd', dir: -1 }, states: { k: 'pb', dir: 1 } };
+const TEXT_SORT = new Set(['id', 'label', 'type', 'name', 'pa', 'pb']); // posições: 1º primeiro
+const dirBtn = dir => `${dir > 0 ? '↑' : '↓'}`;
+const dirLabel = dir => t(dir > 0 ? 'sort.asc' : 'sort.desc');
+/** Barra "Ordenar por" de uma tabela: `opts` = [[campo, rótulo], ...]. */
+function sortBarHTML(tbl, opts) {
+  const s = tblSort[tbl];
+  return `<div class="sortbar"><label><span>${esc(t('sortBy'))}</span><select data-sort="${tbl}">${opts.map(([k, l]) => `<option value="${k}"${k === s.k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label><button class="ghost sortdir" type="button" data-sortdir="${tbl}" title="${esc(dirLabel(s.dir))}" aria-label="${esc(dirLabel(s.dir))}">${dirBtn(s.dir)}</button></div>`;
+}
+/** Comparador por campo; vazios (—) sempre no fim. */
+const byField = (get, dir) => (x, y) => {
+  const a = get(x), b = get(y);
+  if (a == null || (typeof a === 'number' && !isFinite(a))) return b == null || (typeof b === 'number' && !isFinite(b)) ? 0 : 1;
+  if (b == null || (typeof b === 'number' && !isFinite(b))) return -1;
+  return (a < b ? -1 : a > b ? 1 : 0) * dir;
+};
+/** Linhas {name, a, b, d} das tabelas de Δ (por espaço e modelos). */
+const DELTA_GET = { absd: r => (r.d == null ? null : Math.abs(r.d)), d: r => r.d, a: r => r.a, b: r => r.b, name: r => r.name.toLowerCase() };
+const sortDelta = (rows, tbl) => rows.sort(byField(DELTA_GET[tblSort[tbl].k] || DELTA_GET.absd, tblSort[tbl].dir));
+document.addEventListener('change', e => {
+  const s = e.target.closest('select[data-sort]');
+  if (!s) return;
+  const st = tblSort[s.dataset.sort];
+  st.k = s.value; st.dir = TEXT_SORT.has(st.k) ? 1 : -1;
+  s.dataset.sort === 'func' ? renderFunctional() : renderCompare();
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-sortdir]');
+  if (!b) return;
+  tblSort[b.dataset.sortdir].dir *= -1;
+  b.dataset.sortdir === 'func' ? renderFunctional() : renderCompare();
+});
+const COLS_BASE = ['id', 'label', 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+const cols = () => (poiesis ? [...COLS_BASE.slice(0, -1), 'integT', 'dInteg', 'ent'] : COLS_BASE);
+/** Poiesis13: integração tradicional e diferença (proposto − tradicional) por espaço. */
+function cmpVal(id, k) {
+  const a = R.per[id].integ, b = RT && RT.per[id] ? RT.per[id].integ : null;
+  return k === 'integT' ? b : a == null || b == null ? null : a - b;
+}
 const isTextKey = k => k === 'id' || k === 'type' || k === 'label';
 const colLabelLong = k => (isTextKey(k) ? t('col.' + k) : t('m.' + k));
 function sortedNodes() {
-  const key = n => (sortKey === 'id' ? n.id : sortKey === 'label' ? (n.label || '\uffff').toLowerCase() : sortKey === 'type' ? R.per[n.id].type : R.per[n.id][sortKey]);
-  return [...model.nodes].sort((a, b) => {
-    let va = key(a), vb = key(b);
-    if (va == null) va = -Infinity;
-    if (vb == null) vb = -Infinity;
-    return va < vb ? -sortDir : va > vb ? sortDir : 0; // sortDir 1 = crescente, -1 = decrescente
-  });
+  const key = n => (sortKey === 'id' ? n.id : sortKey === 'label' ? (n.label || '\uffff').toLowerCase() : sortKey === 'type' ? R.per[n.id].type : sortKey === 'integT' || sortKey === 'dInteg' ? cmpVal(n.id, sortKey) : R.per[n.id][sortKey]);
+  return [...model.nodes].sort(byField(key, sortDir)); // sortDir 1 = crescente, -1 = decrescente; vazios no fim
 }
 function renderResults() {
   const g = R;
+  const COLS = cols();
+  if (!COLS.includes(sortKey)) sortKey = 'integ';
   const issues = [];
   const orphans = g.ids.filter(i => g.per[i].orphan);
   if (orphans.length) issues.push(t('val.orphan', { ids: orphans.join(', ') }));
@@ -1343,8 +1425,8 @@ function renderResults() {
     const p = R.per[n.id];
     return `<tr data-id="${esc(n.id)}" class="${n.id === model.root ? 'root' : ''}${selSet.has(n.id) ? ' sel' : ''}">
       <td class="name"><span class="chip" style="background:${colourOf(n.id)}"></span> ${esc(n.id)} · ${esc(n.name)}</td><td class="name">${esc(n.label || '—')}</td><td class="name">${p.type}</td>
-      <td>${p.conn}</td><td>${fmt3(p.ctrl)}</td><td>${fmt3(p.controllability)}</td><td>${fmt1(p.choice)}</td><td>${fmtInt(p.depth)}</td>
-      <td>${p.td}</td><td>${fmt3(p.md)}</td><td>${fmt3(p.ra)}</td><td>${fmt3(p.rra)}</td><td><b>${fmt3(p.integ)}</b></td><td>${fmt3(p.ent)}</td></tr>`;
+      <td>${p.conn}</td><td>${fmt3(p.ctrl)}</td><td>${fmt3(p.controllability)}</td><td>${fmt1(p.choice)}</td><td>${fmtDepth(p.depth)}</td>
+      <td>${fmtDepth(p.td)}</td><td>${fmt3(p.md)}</td><td>${fmt3(p.ra)}</td><td>${fmt3(p.rra)}</td><td><b>${fmt3(p.integ)}</b></td>${poiesis ? `<td>${fmt3(cmpVal(n.id, 'integT'))}</td><td>${fmtDelta(cmpVal(n.id, 'dInteg'))}</td>` : ''}<td>${fmt3(p.ent)}</td></tr>`;
   }).join('');
   const showKey = isTextKey(sortKey) ? currentMeasure : sortKey;
   $('spaceCards').innerHTML = rows.map(n => {
@@ -1353,14 +1435,14 @@ function renderResults() {
       <span class="chip" style="background:${colourOf(n.id)}"></span>
       <span class="nm">${esc(n.id)} · ${esc(n.name)}</span>
       <span class="big">${(FMT[showKey] || fmt3)(v)}</span>
-      <span class="sub">${n.label ? esc(n.label) + ' · ' : ''}${esc(t('type'))} ${p.type} · ${esc(t('col.integ'))} ${fmt3(p.integ)} · ${esc(t('col.choice'))} ${fmt1(p.choice)} · ${esc(t('col.depth'))} ${fmtInt(p.depth)}</span>
+      <span class="sub">${n.label ? esc(n.label) + ' · ' : ''}${esc(t('type'))} ${p.type} · ${esc(t('col.integ'))} ${fmt3(p.integ)} · ${esc(t('col.choice'))} ${fmt1(p.choice)} · ${esc(t('col.depth'))} ${fmtDepth(p.depth)}</span>
     </button>`;
   }).join('');
   renderDiagnosis();
   renderScatter();
   renderFunctional();
   renderOrientation();
-  $('methodFoot').innerHTML = (researchMode ? t('method.passage') : '') + t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
+  $('methodFoot').innerHTML = (poiesis ? t('method.poiesis') : researchMode ? t('method.passage') : '') + t('method.base') + t(conv.entropy === 'depthmapx' ? 'method.ent.dm' : 'method.ent.v1') +
     t(conv.differenceFactor === 'ra' ? 'method.h.ra' : 'method.h.int') + t('method.tail');
 }
 $('resTable').querySelector('thead').addEventListener('click', e => {
@@ -1368,7 +1450,7 @@ $('resTable').querySelector('thead').addEventListener('click', e => {
   if (!th) return;
   const k = th.dataset.k;
   if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = isTextKey(k) ? 1 : -1; }
-  renderResults(); $('sortSel').value = sortKey;
+  renderResults(); renderPanel();
 });
 function pickFromResults(e) {
   const el = e.target.closest('[data-id]');
@@ -1380,6 +1462,7 @@ $('resTable').querySelector('tbody').addEventListener('click', pickFromResults);
 $('spaceCards').addEventListener('click', pickFromResults);
 /** Resultado global (raio 0) — o genótipo e o H* entre funções são propriedades da configuração inteira. */
 const globalOf = (m, Rx) => (radius === 0 ? Rx : analyse(m, 0));
+const FUNC_GET = { label: s => s.label.toLowerCase(), n: s => s.ids.length, integ: s => s.meanInteg, rra: s => s.meanRRA, depth: s => s.meanDepth };
 function renderFunctional() {
   const box = $('funcBox');
   const F = functionalSummary(model, globalOf(model, R));
@@ -1388,8 +1471,9 @@ function renderFunctional() {
   box.innerHTML = `<h4>${esc(t('func.title'))} <button class="linkish" data-info="genotype">ⓘ</button></h4>
     <p class="ineq"><span class="k">${esc(t('func.ineq'))}</span> ${esc(F.inequality)}</p>
     ${F.Hs != null ? `<p class="ineq"><span class="k">${esc(t('func.Hs'))}</span> ${f3(F.Hs)}</p>` : ''}
+    ${sortBarHTML('func', [['label', t('col.label')], ['n', t('func.n')], ['integ', t('func.integ')], ['rra', t('func.rra')], ['depth', t('func.depth')]])}
     <div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.label'))}</th><th>${esc(t('func.n'))}</th><th>${esc(t('func.integ'))}</th><th>${esc(t('func.rra'))}</th><th>${esc(t('func.depth'))}</th></tr></thead><tbody>
-    ${F.stats.map(s => `<tr><td class="name">${esc(s.label)} <span class="mini">${esc(s.ids.join(', '))}</span></td><td>${s.ids.length}</td><td><b>${f3(s.meanInteg)}</b></td><td>${f3(s.meanRRA)}</td><td>${s.meanDepth == null ? '—' : s.meanDepth.toFixed(2)}</td></tr>`).join('')}
+    ${[...F.stats].sort(byField(FUNC_GET[tblSort.func.k], tblSort.func.dir)).map(s => `<tr><td class="name">${esc(s.label)} <span class="mini">${esc(s.ids.join(', '))}</span></td><td>${s.ids.length}</td><td><b>${f3(s.meanInteg)}</b></td><td>${f3(s.meanRRA)}</td><td>${s.meanDepth == null ? '—' : s.meanDepth.toFixed(2)}</td></tr>`).join('')}
     </tbody></table></div>`;
 }
 /** Faces da envoltória para as quais o espaço abre (só com exterior marcado e faces registradas). */
@@ -1476,7 +1560,7 @@ function printReport() {
 
 /* ---------------- DIAGNÓSTICO CONFIGURACIONAL (H&H 1984, cap. 4) ---------------- */
 function renderDiagnosis() {
-  const box = $('diagBox'), D = diagnose(syntacticInput(model), R);
+  const box = $('diagBox'), D = diagnose(inputOf(model), R);
   box.hidden = !D.L;
   if (!D.L) return;
   const pct = n => Math.round((100 * n) / D.L);
@@ -1493,7 +1577,7 @@ function renderDiagnosis() {
 }
 /** Linha do painel do espaço: distribuição e simetria em relação à raiz. */
 function diagLine(id) {
-  const s = diagnose(syntacticInput(model), R).spaces[id];
+  const s = diagnose(inputOf(model), R).spaces[id];
   if (!s || s.distributed === null) return '';
   const sym = s.symmetricWith.length ? t('diag.sSymWith', { ids: s.symmetricWith.join(', ') }) : t('diag.sAsym');
   return `<button class="linkish faces" data-info="diagnosis">${esc(t('diag.space', { dist: t(s.distributed ? 'diag.sDist' : 'diag.sNondist'), sym }))}</button>`;
@@ -1501,7 +1585,8 @@ function diagLine(id) {
 $('diagBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('funcBox').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
 $('globalCards').addEventListener('click', e => { const c = e.target.closest('[data-info]'); if (c) openInfo(c.dataset.info); });
-$('sortSel').addEventListener('change', e => { sortKey = e.target.value; sortDir = isTextKey(sortKey) ? 1 : -1; renderResults(); });
+$('sortSel').addEventListener('change', e => { sortKey = e.target.value; sortDir = isTextKey(sortKey) ? 1 : -1; renderResults(); renderPanel(); });
+$('sortDir').addEventListener('click', () => { sortDir *= -1; renderResults(); renderPanel(); });
 
 /* ---------------- CENÁRIOS ---------------- */
 function renderScenarios() {
@@ -1626,6 +1711,15 @@ function renderCompare() {
   const cm = $('cmpMeasure');
   cm.innerHTML = MEASURES.filter(x => x.key !== 'focus').map(x => `<option value="${x.key}">${esc(t('m.' + x.key))}</option>`).join('');
   cm.value = cmpKey();
+  $('cvModels').hidden = $('cvStates').hidden = !poiesis;
+  cm.closest('label').hidden = cmpView === 'states'; // o gráfico de estados tem eixos próprios
+  if (!poiesis && (cmpView === 'models' || cmpView === 'states')) cmpView = 'maps';
+  if (cmpView === 'models') { $('cmpChips').innerHTML = ''; renderModels(box); return; }
+  if (cmpView === 'states') {
+    $('cmpChips').innerHTML = all.map(sc => `<button class="chipbtn" data-chip="${esc(sc.id)}" aria-pressed="${!cmpSel || cmpSel.has(sc.id)}">${esc(sc.name)}</button>`).join('');
+    renderStates(box, all.filter(sc => !cmpSel || cmpSel.has(sc.id)));
+    return;
+  }
   if (all.length < 2) {
     $('cmpChips').innerHTML = '';
     box.innerHTML = `<div class="valbox">${esc(t('cmp.need2'))}<div class="btnrow"><button data-cmd="dup">${esc(t('cmp.dupNow'))}</button><button class="ghost" data-cmd="new">${esc(t('scn.new'))}</button></div></div>`;
@@ -1652,9 +1746,10 @@ function renderCompare() {
           <button class="ghost" data-edit="${esc(sc.id)}">${esc(t('cmp.edit'))}</button></figcaption>
         <svg class="minisvg" data-scn="${esc(sc.id)}" viewBox="0 0 ${W0} ${H0}" preserveAspectRatio="xMidYMid meet"></svg>
       </figure>`; }).join('')}</div>`;
+    const frame = cmpView === 'jgraph' ? jFrame(scs.map(sc => [sc.model, poiesis])) : null;
     box.querySelectorAll('svg.minisvg').forEach(svg => {
       const sc = scs.find(x => x.id === svg.dataset.scn), r = res.get(sc.id);
-      if (cmpView === 'maps') drawMiniMap(svg, sc.model, r, colourIn(r)); else drawJGraph(svg, sc.model, r);
+      if (cmpView === 'maps') drawMiniMap(svg, sc.model, r, colourIn(r)); else drawJGraph(svg, sc.model, new Set(), poiesis, null, frame);
     });
     return;
   }
@@ -1691,11 +1786,10 @@ function renderCompare() {
   const rkA = ranks(RA, key), rkB = ranks(RB, key);
   const nA = new Map(A.model.nodes.map(n => [n.id, n])), nB = new Map(B.model.nodes.map(n => [n.id, n]));
   const dfmt = d => (f === fmtInt ? String(d) : d.toFixed(f === fmt1 ? 1 : 3));
-  const rows = match.pairs
-    .map(pr => { const va = RA.per[pr.a][key], vb = RB.per[pr.b][key]; return { pr, va, vb, d: va != null && vb != null ? vb - va : null }; })
-    .sort((x, y) => Math.abs(y.d ?? 0) - Math.abs(x.d ?? 0));
+  const rows = sortDelta(match.pairs
+    .map(pr => { const va = RA.per[pr.a][key], vb = RB.per[pr.b][key]; return { pr, va, vb, a: va, b: vb, name: nA.get(pr.a).name, d: va != null && vb != null ? vb - va : null }; }), 'delta');
   if (!rows.length) html += `<div class="valbox">${esc(t('cmp.noMatch'))}</div>`;
-  else html += `<div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.id'))}</th><th>${esc(A.name)}</th><th>${esc(B.name)}</th><th>Δ</th><th>${esc(t('cmp.rank'))}</th></tr></thead><tbody>
+  else html += sortBarHTML('delta', [['absd', t('sort.absd')], ['d', 'Δ'], ['a', A.name], ['b', B.name], ['name', t('col.id')]]) + `<div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('col.id'))}</th><th>${esc(A.name)}</th><th>${esc(B.name)}</th><th>Δ</th><th>${esc(t('cmp.rank'))}</th></tr></thead><tbody>
     ${rows.map(({ pr, va, vb, d }) => {
       const na = nA.get(pr.a), nb = nB.get(pr.b);
       const name = na.name === nb.name ? esc(na.name) : `${esc(na.name)} → ${esc(nb.name)}`;
@@ -1708,6 +1802,146 @@ function renderCompare() {
   html += `<p class="foot">${esc(t(A.family === B.family ? 'cmp.matchFamily' : 'cmp.matchOther'))} ${esc(t('cmp.sizeNote'))}</p>`;
   box.innerHTML = html;
 }
+/** Rodapé: média, mín e máx de cada modelo (só valores definidos); Δ = estatística classificada − clássica. */
+function statRows(rows, f, delta) {
+  const nums = k => rows.map(r => r[k]).filter(v => v != null && isFinite(v));
+  const st = { mean: v => (v.length ? v.reduce((s, x) => s + x, 0) / v.length : null), min: v => (v.length ? Math.min(...v) : null), max: v => (v.length ? Math.max(...v) : null) };
+  return Object.entries(st).map(([k, fn]) => {
+    const a = fn(nums('a')), b = fn(nums('b')), d = a != null && b != null ? b - a : null;
+    return `<tr class="statrow"><th class="name rowh">${esc(t('stat.' + k))}</th><td>${f(a)}</td><td>${f(b)}</td><td class="${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${delta(d)}</td><td></td></tr>`;
+  }).join('');
+}
+/**
+ * Poiesis13 → Comparar → Modelos: a MESMA instância (cenário ativo) em duas representações —
+ * clássica (acesso = aberto = 1, janela fora) e relações classificadas (pesos) — um indicador por vez.
+ */
+function renderModels(box) {
+  const key = cmpKey(), mm = meta(key), f = FMT[key] || fmt3, RC = RT, RP = R;
+  const vals = [];
+  [RC, RP].forEach(r => r.ids.forEach(id => { const v = r.per[id][key]; if (v != null && isFinite(v)) vals.push(v); }));
+  const mn = vals.length ? Math.min(...vals) : 0, mx = vals.length ? Math.max(...vals) : 1;
+  const colourIn = r => id => measureColor(r.per[id][key], mn, mx, mm.invert);
+  const avg = r => { const v = r.ids.map(id => r.per[id][key]).filter(x => x != null && isFinite(x)); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const dig = f === fmtInt ? 0 : f === fmt1 ? 1 : f === fmtDepth ? 2 : 3;
+  const delta = d => (d == null ? '—' : (d > 0 ? '+' : '') + d.toFixed(dig));
+  const fig = (m, r) => `<figure class="mini"><figcaption><span><b>${esc(t('cmpm.' + m))}</b><br><small>${esc(t('cmpm.mean'))} ${f(avg(r))} · ${esc(t('cmpm.depth'))} ${fmtInt(maxDepth(r))} · ${esc(t('cmpm.rings'))} ${r.circuit}</small></span></figcaption>
+    <svg class="minisvg" data-model="${m}" viewBox="0 0 ${W0} ${H0}" preserveAspectRatio="xMidYMid meet"></svg></figure>`;
+  const rkC = ranks(RC, key), rkP = ranks(RP, key);
+  const rows = sortDelta(model.nodes.map(n => { const a = RC.per[n.id][key], b = RP.per[n.id][key]; return { n, a, b, name: n.name, d: a != null && b != null && isFinite(a) && isFinite(b) ? b - a : null }; }), 'models');
+  box.innerHTML = `<p class="hint cmp-note">${esc(t('cmpm.intro', { m: t('m.' + key) }))}</p>
+    <div class="legend cmp-legend"><span>${esc(t('legend.seg'))} · ${f(mm.invert ? mx : mn)}</span><span class="ramp"></span><span>${f(mm.invert ? mn : mx)} · ${esc(t('legend.int'))}</span></div>
+    <div class="mini-grid">${fig('classic', RC)}${fig('poiesis', RP)}</div>
+    ${sortBarHTML('models', [['absd', t('sort.absd')], ['d', 'Δ'], ['a', t('cmpm.classic')], ['b', t('cmpm.poiesis')], ['name', t('col.id')]])}
+    <div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('m.' + key))}</th><th>${esc(t('cmpm.classic'))}</th><th>${esc(t('cmpm.poiesis'))}</th><th>Δ</th><th>${esc(t('cmp.rank'))}</th></tr></thead><tbody>
+    ${rows.map(({ n, a, b, d }) => `<tr><td class="name"><span class="chip" style="background:${colourIn(RP)(n.id)}"></span> ${esc(n.id)} · ${esc(n.name)}</td>
+      <td>${f(a)}</td><td>${f(b)}</td><td class="${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${delta(d)}</td><td>${rkC[n.id] ?? '—'} → ${rkP[n.id] ?? '—'}</td></tr>`).join('')}
+    </tbody><tfoot>${statRows(rows, f, delta)}</tfoot></table></div>
+    <p class="foot">${esc(t('cmpm.foot'))}</p>`;
+  const frame = jFrame([[model, false], [model, true]]);
+  box.querySelectorAll('svg.minisvg').forEach(svg => {
+    const c = svg.dataset.model === 'poiesis';
+    drawJGraph(svg, model, new Set(), c, colourIn(c ? RP : RC), frame);
+  });
+}
+/*
+ * Poiesis13 → Comparar → Estados: gráfico de inclinação das POSIÇÕES. Cada cenário é ordenado pelo indicador X
+ * (1 = maior) no modelo clássico (esquerda) e no de relações classificadas (direita); cruzamentos = o modelo
+ * mede o fenômeno de outro jeito. Cor da linha = direção (vermelho sobe 2+, azul cai 2+, cinza estável).
+ * Colunas: Δ do indicador, mudança de posição e — na mesma notação ○ clássico → ● classificado —
+ * profundidade do grafo (prof. máxima da raiz, em passos) e anéis.
+ */
+let stX = 'card.meanInt';
+const ST_UP = '#c0271e', ST_DOWN = '#2a78d6', ST_FLAT = '#b4b2a9', ST_MARK = '#888780';
+/** Posição por valor decrescente (1 = maior); empates dividem a posição. */
+function rankDesc(rows, k) {
+  const s = [...rows].sort((a, b) => b[k] - a[k]), out = new Map();
+  s.forEach((r, i) => out.set(r, i > 0 && s[i - 1][k] === r[k] ? out.get(s[i - 1]) : i + 1));
+  return out;
+}
+/** Rótulo curto: tira as palavras iniciais comuns a todos ("Cardoso 064 (def., 1960)" → "064" + "def., 1960"). */
+function shortNames(names) {
+  const words = names.map(n => n.replace(/\s*\(.*\)\s*$/, '').split(/\s+/));
+  let c = 0;
+  while (words.every(w => w.length > c + 1 && w[c] === words[0][c])) c++;
+  return names.map((n, i) => ({ main: words[i].slice(c).join(' '), sub: (/\((.*)\)\s*$/.exec(n) || [])[1] || '' }));
+}
+function renderStates(box, scs) {
+  const ind = CMP_INDICATORS.find(i => i[0] === stX) || CMP_INDICATORS.find(i => i[0] === 'card.meanInt');
+  const [xk, fx, dig] = ind, xLabel = t(xk, { basis: t('basis.ra') });
+  const fmtX = v => (v == null || !isFinite(v) ? '—' : v.toFixed(dig)), ok = v => v != null && isFinite(v);
+  const short = shortNames(scs.map(sc => sc.name));
+  const data = scs.map((sc, i) => {
+    const C0 = runAnalysis(syntacticInput(sc.model), { ...conv, radius }), P0 = runAnalysis(weightedInput(sc.model), { ...conv, radius });
+    return { sc, name: sc.name, ...short[i], xa: fx(C0), xb: fx(P0), ya: maxDepth(C0), yb: maxDepth(P0), ra: C0.circuit, rb: P0.circuit };
+  });
+  const pts = data.filter(p => ok(p.xa) && ok(p.xb));
+  const RA = rankDesc(pts, 'xa'), RB = rankDesc(pts, 'xb');
+  data.forEach(p => {
+    p.pa = RA.get(p) ?? null; p.pb = RB.get(p) ?? null;
+    p.mv = p.pa != null ? p.pa - p.pb : null; p.dx = ok(p.xa) && ok(p.xb) ? p.xb - p.xa : null;
+  });
+  const rows = [...data].sort(byField(STATES_GET[tblSort.states.k] || STATES_GET.pb, tblSort.states.dir));
+  const pair = (a, b) => (a == null ? '—' : `${a} → ${b}`);
+  box.innerHTML = `<div class="scatter-ctrl"><label><span>${esc(t('st.ind'))}</span><select id="stXSel">${CMP_INDICATORS.map(([k]) => `<option value="${k}"${k === xk ? ' selected' : ''}>${esc(t(k, { basis: t('basis.ra') }))}</option>`).join('')}</select></label></div>
+    <div class="scatter-legend"><span><i style="background:${ST_UP}"></i>${esc(t('st.up'))}</span><span><i style="background:${ST_DOWN}"></i>${esc(t('st.down'))}</span><span><i style="background:${ST_FLAT}"></i>${esc(t('st.flat'))}</span><span>▼ ${esc(t('st.lostLevel'))}</span></div>
+    <div class="slopewrap"><svg class="slope" id="statesSvg" role="img" aria-label="${esc(t('cv.states'))}"></svg></div>
+    ${sortBarHTML('states', [['pb', t('st.posB')], ['pa', t('st.posA')], ['mv', t('st.move')], ['dx', 'Δ'], ['name', t('st.scn')]])}
+    <div class="tablewrap" style="display:block"><table><thead><tr><th class="name">${esc(t('st.scn'))}</th><th>${esc(t('cmpm.classic'))}</th><th>${esc(t('cmpm.poiesis'))}</th><th>Δ</th><th>${esc(t('st.pos'))}</th><th>${esc(t('cmpm.depth'))}</th><th>${esc(t('cmpm.rings'))}</th></tr></thead><tbody>
+    ${rows.map(p => `<tr><td class="name">${esc(p.name)}</td><td>${fmtX(p.xa)}</td><td>${fmtX(p.xb)}</td><td>${p.dx == null ? '—' : (p.dx > 0 ? '+' : '') + p.dx.toFixed(dig)}</td><td>${pair(p.pa, p.pb)}</td><td>${pair(p.ya, p.yb)}</td><td>${pair(p.ra, p.rb)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="foot">${esc(t('st.foot', { x: xLabel }))}${data.length > pts.length ? ' ' + esc(t('st.excluded', { n: data.length - pts.length })) : ''}</p>`;
+  $('stXSel').addEventListener('change', e => { stX = e.target.value; renderCompare(); });
+  const svg = $('statesSvg'), n = pts.length;
+  const W = 900, top = 50, rh = 34, H = top + Math.max(n, 1) * rh + 10, XA = 200, XB = 400;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (!n) return;
+  const Y = r => top + (r - 1) * rh + rh / 2, put = (p, el) => (p.appendChild(el), el);
+  const T = (p, x, y, s, o = {}) => put(p, Object.assign(Eo('text', { x, y, 'font-family': 'inherit', 'font-size': o.size || 12, fill: o.fill || C.ink2, 'font-weight': o.w || 400, 'text-anchor': o.a || 'start' }), { textContent: s }));
+  for (let r = 1; r <= n; r += 2) svg.appendChild(Eo('rect', { x: 0, y: top + (r - 1) * rh, width: W, height: rh, fill: C.panel }));
+  const head = (x, a, b) => { T(svg, x, 22, a, { a: 'middle', fill: C.ink, w: 600, size: 12.5 }); T(svg, x, 37, b, { a: 'middle', size: 11 }); };
+  head(XA, t('cmpm.classic'), xLabel); head(XB, t('cmpm.poiesis'), xLabel);
+  head(560, 'Δ', t('st.dHint')); head(626, t('st.pos'), ''); head(718, t('cmpm.depth'), t('st.ab')); head(832, t('cmpm.rings'), t('st.ab'));
+  // mesma notação para profundidade e anéis: mini-haltere ○ clássico → ● classificado + "a → b"
+  const mini = (g, x0, x1, lo, hi, a, b, y) => {
+    if (a == null || b == null) { T(g, x0, y + 4, '—'); return; }
+    const X = v => x0 + ((v - lo) / ((hi - lo) || 1)) * (x1 - x0), ch = a !== b;
+    g.appendChild(Eo('line', { x1: x0, y1: y, x2: x1, y2: y, stroke: C.rule, 'stroke-width': 1 }));
+    if (ch) g.appendChild(Eo('line', { x1: X(a), y1: y, x2: X(b), y2: y, stroke: ST_MARK, 'stroke-width': 2, 'stroke-linecap': 'round' }));
+    g.appendChild(Eo('circle', { cx: X(a), cy: y, r: 3.5, fill: '#fff', stroke: ST_MARK, 'stroke-width': 1.5 }));
+    g.appendChild(Eo('circle', { cx: X(b), cy: y, r: 3.5, fill: ST_MARK }));
+    T(g, x1 + 8, y + 4, `${a} → ${b}`, ch ? { fill: C.ink, w: 600 } : {});
+  };
+  const ys = pts.flatMap(p => [p.ya, p.yb]).filter(ok), rs = pts.flatMap(p => [p.ra, p.rb]);
+  const yLo = Math.min(...ys), yHi = Math.max(...ys), rLo = Math.min(...rs), rHi = Math.max(...rs);
+  const groups = [];
+  [...pts].sort((a, b) => Math.abs(a.mv) - Math.abs(b.mv)).forEach(p => {
+    const g = Eo('g', { class: 'st-case' }), big = Math.abs(p.mv) >= 2, c = p.mv >= 2 ? ST_UP : p.mv <= -2 ? ST_DOWN : ST_FLAT;
+    const ya = Y(p.pa), yb = Y(p.pb);
+    g.appendChild(Eo('rect', { x: 0, y: ya - rh / 2, width: XA + 8, height: rh, fill: 'transparent' }));
+    g.appendChild(Eo('rect', { x: XB - 8, y: yb - rh / 2, width: W - XB + 8, height: rh, fill: 'transparent' }));
+    g.appendChild(Eo('line', { x1: XA, y1: ya, x2: XB, y2: yb, stroke: c, 'stroke-width': big ? 3 : 2, 'stroke-linecap': 'round' }));
+    g.appendChild(Eo('circle', { cx: XA, cy: ya, r: 5, fill: '#fff', stroke: c, 'stroke-width': 2 }));
+    if (ok(p.ya) && ok(p.yb) && p.yb < p.ya) g.appendChild(Eo('path', { d: `M${XB - 7} ${yb - 6} L${XB + 7} ${yb - 6} L${XB} ${yb + 7} Z`, fill: c }));
+    else g.appendChild(Eo('circle', { cx: XB, cy: yb, r: 5.5, fill: c }));
+    T(g, 12, ya + 4, p.pa + 'º', { size: 11 });
+    T(g, XA - 14, ya - 2, p.main, { a: 'end', fill: C.ink, w: 600, size: 13 });
+    T(g, XA - 14, ya + 12, [p.sub, fmtX(p.xa)].filter(Boolean).join(' · '), { a: 'end', size: 11 });
+    T(g, XB + 14, yb - 2, p.main, { fill: C.ink, w: 600, size: 13 });
+    T(g, XB + 14, yb + 12, fmtX(p.xb), { size: 11 });
+    T(g, 560, yb + 4, (p.dx > 0 ? '+' : '') + p.dx.toFixed(dig), { a: 'middle', fill: C.ink });
+    T(g, 626, yb + 4, p.mv > 0 ? `▲ ${p.mv}` : p.mv < 0 ? `▼ ${-p.mv}` : '=', big ? { a: 'middle', fill: c, w: 600 } : { a: 'middle' });
+    mini(g, 676, 716, yLo, yHi, p.ya, p.yb, yb);
+    mini(g, 790, 830, rLo, rHi, p.ra, p.rb, yb);
+    const tip = Eo('title', {}); tip.textContent = `${p.name}: ${p.pa}º → ${p.pb}º`; g.appendChild(tip);
+    svg.appendChild(g); groups.push(g);
+  });
+  // passar o mouse sobre um caso destaca a linha dele e apaga os outros
+  groups.forEach(g => {
+    g.addEventListener('pointerenter', () => groups.forEach(o => { o.style.opacity = o === g ? 1 : 0.15; }));
+    g.addEventListener('pointerleave', () => groups.forEach(o => { o.style.opacity = 1; }));
+  });
+}
+const STATES_GET = { pb: p => p.pb, pa: p => p.pa, mv: p => p.mv, dx: p => p.dx, name: p => p.name.toLowerCase() };
 $('cmpViews').addEventListener('click', e => { const b = e.target.closest('[data-cv]'); if (b) { cmpView = b.dataset.cv; renderCompare(); } });
 $('cmpChips').addEventListener('click', e => {
   const b = e.target.closest('[data-chip]');
@@ -1912,13 +2146,13 @@ function showImageOverlay(url, name) {
 }
 function tableCSV() {
   // modo Simples: mesmas colunas de antes; modo Pesquisa acrescenta camada e faces
-  const cols = ['id', 'name', 'label', ...(researchMode ? ['camada', 'faces'] : []), 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent'];
+  const cols = ['id', 'name', 'label', ...(researchMode ? ['camada', 'faces'] : []), 'type', 'conn', 'ctrl', 'controllability', 'choice', 'depth', 'td', 'md', 'ra', 'rra', 'integ', 'ent', ...(poiesis ? ['integ_trad', 'd_integ'] : [])];
   const orient = orientation(model).perSpace;
   let out = cols.join(',') + '\n';
   model.nodes.forEach(n => {
     const p = R.per[n.id];
     const faces = orient[n.id] ? FACES.filter(f => orient[n.id].faces[f]).map(f => f + ':' + orient[n.id].faces[f]).join(';') : '';
-    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', ...(researchMode ? [SYNTACTIC_LAYER, faces] : []), p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent]
+    out += [n.id, '"' + n.name.replace(/"/g, '""') + '"', '"' + (n.label || '').replace(/"/g, '""') + '"', ...(researchMode ? [poiesis ? 'poiesis13' : SYNTACTIC_LAYER, faces] : []), p.type, p.conn, p.ctrl, p.controllability, p.choice, p.depth, p.td, p.md, p.ra, p.rra, p.integ, p.ent, ...(poiesis ? [cmpVal(n.id, 'integT'), cmpVal(n.id, 'dInteg')] : [])]
       .map(v => (typeof v === 'number' ? (+v).toFixed(4) : v == null ? '' : v)).join(',') + '\n';
   });
   return out;
@@ -2003,7 +2237,7 @@ $('optValues').addEventListener('change', e => { showValues = e.target.checked; 
 $('optRadius').addEventListener('change', e => { radius = clamp(parseInt(e.target.value, 10) || 0, 0, 99); recompute(); });
 $('optEntropy').addEventListener('change', e => { conv.entropy = e.target.value; recompute(); });
 $('optHFactor').addEventListener('change', e => { conv.differenceFactor = e.target.value; recompute(); });
-document.querySelectorAll('[data-mode-btn]').forEach(b => b.addEventListener('click', () => setResearchMode(b.dataset.modeBtn === 'research')));
+document.querySelectorAll('[data-mode-btn]').forEach(b => b.addEventListener('click', () => setResearchMode(b.dataset.modeBtn !== 'simple', b.dataset.modeBtn === 'poiesis')));
 $('btnDerive').addEventListener('click', openReview);
 $('btnCalib').addEventListener('click', () => { setView('graph'); setMode('measure'); });
 $('btnExt').addEventListener('click', createExterior);
@@ -2114,7 +2348,7 @@ document.addEventListener('keydown', e => {
     else if (selEdge) { e.preventDefault(); removeEdge(selEdge); }
     return;
   }
-  if (researchMode && selEdge && /^[1-4]$/.test(k)) { setEdgeKind(selEdge, EDGE_KINDS[+k - 1]); return; }
+  if (researchMode && selEdge && /^[1-4]$/.test(k) && kindsShown()[+k - 1]) { setEdgeKind(selEdge, kindsShown()[+k - 1]); return; }
   if (k === 'n') addNodeAt(lastMouse.x, lastMouse.y);
   if (k === 'l' && selSet.size === 2) { const [a, b] = [...selSet]; addEdge(a, b); }
   if (k === 'r' && selSet.size === 1) setRoot([...selSet][0]);
@@ -2133,8 +2367,7 @@ setLang(getLang());
 applyI18n();
 $('btnLang').textContent = getLang() === 'pt' ? 'EN' : 'PT';
 document.documentElement.classList.toggle('projector', projector);
-document.body.classList.toggle('research', researchMode);
-document.querySelectorAll('[data-mode-btn]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.modeBtn === 'research') === researchMode)));
+paintMode();
 $('btnProjector').setAttribute('aria-pressed', String(projector));
 $('bgControls').hidden = !bg.img;
 Object.entries(BG_INPUTS).forEach(([id, key]) => { $(id).value = bg[key]; });
