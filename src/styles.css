@@ -194,8 +194,10 @@ html.projector .t-val { font-size: 13px; }
 button.card { cursor: help; }
 .card .k { font-family: var(--mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: .2rem; }
 .card .v { font-family: var(--serif); font-size: 1.3rem; color: var(--accent); font-weight: 700; }
-.sortbar { display: none; align-items: center; gap: .5rem; margin-bottom: .5rem; font-family: var(--mono); font-size: .72rem; color: var(--ink2); }
+.sortbar { display: flex; align-items: center; gap: .5rem; margin: .4rem 0 .5rem; font-family: var(--mono); font-size: .72rem; color: var(--ink2); }
+.sortbar label { display: flex; align-items: center; gap: .5rem; flex: 1; max-width: 26rem; }
 .sortbar select { width: auto; flex: 1; }
+.sortdir { min-width: 2.4rem; padding: .25rem .5rem; }
 .tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; }
 table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: .78rem; background: var(--panel); }
 th, td { padding: .5rem .6rem; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
@@ -260,6 +262,11 @@ body:not(.research) .research-only { display: none !important; }
   font-family: var(--mono); font-size: .6rem; letter-spacing: .1em; text-transform: uppercase;
   background: #2f5d8a; color: #fff; border-radius: 4px; padding: .15rem .4rem; white-space: nowrap;
 }
+body.poiesis .modebadge { background: #b3261e; }
+tfoot .statrow th, tfoot .statrow td { border-top: 1px solid var(--rule); font-weight: 600; }
+.slopewrap { overflow-x: auto; margin: .3rem 0 .6rem; }
+.slope { display: block; width: 100%; min-width: 680px; height: auto; }
+.st-case { transition: opacity .15s; }
 
 /* ---------- camadas e orientação ---------- */
 .layer-pick select { max-width: 11rem; }

@@ -9,8 +9,15 @@ export interface AnalysisInput {
   nodes: { id: string }[];
   edges: [string, string][];
   root: string | null;
+  /**
+   * Custo de cada ligação (paralelo a `edges`). Ausente = análise topológica clássica (1 passo cada).
+   * Presente (modelo Poiesis13): Prof.T, MD, RA, RRA, integração, choice e raio usam o custo;
+   * a profundidade do grafo (a partir da raiz ou do foco, diâmetro), conectividade, controle, tipos e entropia
+   * continuam em passos — contados no grafo das relações classificadas (decisão da pesquisadora, 2026-10-26).
+   */
+  costs?: number[];
 }
-import { biconnectedBlocks, bfs, brandes, buildGraph, countComponents, degree, pearson } from './graph';
+import { biconnectedBlocks, bfs, brandes, brandesWeighted, buildGraph, countComponents, degree, dijkstra, pearson } from './graph';
 
 export type SpaceType = 'a' | 'b' | 'c' | 'd';
 
@@ -73,7 +80,7 @@ export interface AnalysisResult {
   /** R² conectividade × integração global (nunca local — Hillier 1996). */
   intelligibility: number | null;
   typeCounts: Record<SpaceType, string[]>;
-  /** Profundidade topológica entre dois espaços; null se desconexos ou inexistentes. */
+  /** Profundidade entre dois espaços, em passos; null se desconexos ou inexistentes. */
   distance(a: string, b: string): number | null;
 }
 
@@ -93,24 +100,26 @@ interface DepthStats {
   ent: number | null;
 }
 
-function depthStats(row: Int32Array, self: number, radius: number, entropy: AnalysisOptions['entropy']): DepthStats {
+/** `topo` = profundidades em passos (entropia); igual a `row` na análise topológica. */
+function depthStats(row: ArrayLike<number>, topo: Int32Array, self: number, radius: number, entropy: AnalysisOptions['entropy'], weighted = false): DepthStats {
   const counts: number[] = [];
   let reach = 0, td = 0;
   for (let j = 0; j < row.length; j++) {
     const d = row[j];
-    if (j === self || d < 0 || (radius > 0 && d > radius)) continue;
+    if (j === self || d < 0 || (radius > 0 && d > radius + 1e-9)) continue;
     reach++;
     td += d;
-    counts[d] = (counts[d] ?? 0) + 1;
+    counts[topo[j]] = (counts[topo[j]] ?? 0) + 1;
   }
   const k = reach + 1; // node_count do depthmapX: inclui o próprio nó
   const md = reach > 0 ? td / reach : null;
   let ra: number | null = null, rra: number | null = null, integ: number | null = null;
   // depthmapX só define RA se k > 2 e MD > 1 (nó ligado a todos não tem RA)
-  if (md !== null && k > 2 && md > 1) {
+  // ponderado: MD < 1 é possível (ligações abertas) → RA < 0 fica registrado, mas integração só com RA > 0
+  if (md !== null && k > 2 && (md > 1 || weighted)) {
     ra = (2 * (md - 1)) / (k - 2);
     rra = ra / diamond(k)!;
-    integ = 1 / rra;
+    integ = ra > 0 ? 1 / rra : null;
   }
   let ent: number | null = null;
   if (reach > 0) {
@@ -148,18 +157,19 @@ export function analyse(model: AnalysisInput, opts: Partial<AnalysisOptions> = {
   const options: AnalysisOptions = { ...DEFAULT_OPTIONS, ...opts };
   const radius = Math.max(0, Math.floor(options.radius || 0));
   const ids = model.nodes.map(n => n.id);
-  const g = buildGraph(ids, model.edges);
+  const weighted = !!model.costs;
+  const g = buildGraph(ids, model.edges, model.costs);
   const n = g.n;
   const comp = countComponents(g);
-  const dist: Int32Array[] = [];
-  for (let s = 0; s < n; s++) dist.push(bfs(g, s));
+  const topo: Int32Array[] = [], dist: ArrayLike<number>[] = [];
+  for (let s = 0; s < n; s++) { topo.push(bfs(g, s)); dist.push(weighted ? dijkstra(g, s) : topo[s]); }
 
   const local: DepthStats[] = [], global: DepthStats[] = [];
   for (let i = 0; i < n; i++) {
-    local.push(depthStats(dist[i], i, radius, options.entropy));
-    global.push(radius > 0 ? depthStats(dist[i], i, 0, options.entropy) : local[i]);
+    local.push(depthStats(dist[i], topo[i], i, radius, options.entropy, weighted));
+    global.push(radius > 0 ? depthStats(dist[i], topo[i], i, 0, options.entropy, weighted) : local[i]);
   }
-  const choice = brandes(g, radius);
+  const choice = weighted ? brandesWeighted(g, radius) : brandes(g, radius);
 
   // anéis: blocos biconexos com posto de ciclo ≥ 1
   const ringBlocks = new Int32Array(n), maxRank = new Int32Array(n);
@@ -175,7 +185,7 @@ export function analyse(model: AnalysisInput, opts: Partial<AnalysisOptions> = {
     const conn = degree(g, i);
     let ctrl = 0, within2 = 0;
     for (let p = g.offsets[i]; p < g.offsets[i + 1]; p++) ctrl += 1 / degree(g, g.targets[p]);
-    for (let j = 0; j < n; j++) if (j !== i && dist[i][j] > 0 && dist[i][j] <= 2) within2++;
+    for (let j = 0; j < n; j++) if (j !== i && topo[i][j] > 0 && topo[i][j] <= 2) within2++;
     // Tipos (Hillier 1996, cap. 8): a = 1 ligação; b = fora de anéis; c = em 1 anel;
     // d = ≥3 ligações e em ≥2 anéis (2 blocos cíclicos, ou bloco com posto ≥ 2).
     let type: SpaceType;
@@ -183,7 +193,7 @@ export function analyse(model: AnalysisInput, opts: Partial<AnalysisOptions> = {
     else if (ringBlocks[i] === 0) type = 'b';
     else if (conn >= 3 && (ringBlocks[i] > 1 || maxRank[i] > 1)) type = 'd';
     else type = 'c';
-    const depth = rootIdx !== undefined && dist[rootIdx][i] >= 0 ? dist[rootIdx][i] : null;
+    const depth = rootIdx !== undefined && topo[rootIdx][i] >= 0 ? topo[rootIdx][i] : null;
     const s = local[i];
     per[ids[i]] = {
       conn, ctrl, within2,
@@ -201,7 +211,7 @@ export function analyse(model: AnalysisInput, opts: Partial<AnalysisOptions> = {
   const circuit = L - n + comp;
   const ringiness = comp === 1 && 2 * n - 5 > 0 ? (L - n + 1) / (2 * n - 5) : 0;
   let diameter = 0;
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (dist[i][j] > diameter) diameter = dist[i][j];
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (topo[i][j] > diameter) diameter = topo[i][j];
 
   const hf = differenceFactor(nonNull(global.map(s => (options.differenceFactor === 'ra' ? s.ra : s.integ))));
   const pairs: [number, number][] = [];
@@ -225,8 +235,8 @@ export function analyse(model: AnalysisInput, opts: Partial<AnalysisOptions> = {
     typeCounts,
     distance(a, b) {
       const i = g.index.get(a), j = g.index.get(b);
-      if (i === undefined || j === undefined || dist[i][j] < 0) return null;
-      return dist[i][j];
+      if (i === undefined || j === undefined || topo[i][j] < 0) return null;
+      return topo[i][j];
     },
   };
 }
