@@ -1525,10 +1525,12 @@ function methodSheet() {
 }
 /** Cópia estática de um trecho da tela para o relatório: sem botões, ids e alvos de toque. */
 function staticClone(el) {
-  const c = el.cloneNode(true);
+  const c = el.cloneNode(true), src = [...el.querySelectorAll('select')];
+  // seletor vira o texto escolhido (ex.: quais cenários o "Por espaço" compara); antes de remover os controles
+  c.querySelectorAll('select').forEach((s, i) => { const o = src[i]; s.replaceWith(document.createTextNode(o && o.selectedIndex >= 0 ? o.options[o.selectedIndex].text : '')); });
   c.removeAttribute('id'); c.removeAttribute('hidden');
   c.querySelectorAll('[id]').forEach(x => x.removeAttribute('id'));
-  c.querySelectorAll('.halo, .hit, .edgehit, .scatter-ctrl, select').forEach(x => x.remove());
+  c.querySelectorAll('.halo, .hit, .edgehit, .scatter-ctrl, .sortbar').forEach(x => x.remove());
   c.querySelectorAll('button').forEach(b => b.replaceWith(document.createTextNode(b.textContent.trim() === 'ⓘ' ? '' : b.textContent)));
   return c;
 }
@@ -1552,6 +1554,39 @@ function printReport() {
   for (const id of ['globalCards', 'diagBox', 'scatterBox', 'funcBox', 'orientBox']) { const el = $(id); if (el && !el.hidden) res.appendChild(staticClone(el)); }
   res.appendChild(staticClone($('resTable')));
   res.appendChild(staticClone($('methodFoot')));
+  document.body.classList.add('printing-report');
+  const done = () => { document.body.classList.remove('printing-report'); rep.innerHTML = ''; window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  setTimeout(() => window.print(), 100);
+}
+/**
+ * Relatório da aba ativa de Comparar (mapas, indicadores, por espaço, j-graphs, modelos, estados): cabeçalho,
+ * ficha do que foi comparado e cópia estática da visão. Sai em PDF pelo "imprimir" do navegador, como o relatório principal.
+ */
+function printCompareReport() {
+  renderCompare();
+  const box = $('compareBox');
+  if (!box.textContent.trim()) { toast(t('cmp.noReport')); return; }
+  const scs = project.scenarios.filter(sc => !cmpSel || cmpSel.has(sc.id));
+  const ind = cmpView === 'states' ? (CMP_INDICATORS.find(i => i[0] === stX) || CMP_INDICATORS.find(i => i[0] === 'card.meanInt'))[0] : null;
+  const indicator = cmpView === 'table' ? null : ind ? t(ind, { basis: t('basis.ra') }) : t('m.' + cmpKey());
+  const mode = poiesis ? t('rep.cmpPoiesis') : researchMode ? t('mode.research') : t('mode.simple');
+  const rows = [
+    [t('rep.cmpView'), t('cv.' + cmpView)],
+    [t('rep.cmpMode'), mode],
+    ...(cmpView === 'models' ? [[t('rep.cmpInstance'), activeScenario().name]] : [[t('rep.cmpScenarios'), `${scs.length}: ${scs.map(sc => sc.name).join('; ')}`]]),
+    ...(indicator ? [[t('cmp.indicator'), indicator]] : []),
+    [t('card.radius'), radius === 0 ? t('rep.global') : radius],
+    [t('conv.entropy'), t(conv.entropy === 'depthmapx' ? 'conv.entropy.dm' : 'conv.entropy.v1')],
+    [t('rep.software'), `Space Syntax Engine v${pkg.version} — ${location.origin + location.pathname}`],
+    [t('rep.date'), new Date().toLocaleString(getLang() === 'pt' ? 'pt-BR' : 'en')],
+  ];
+  const rep = $('report'), body = staticClone(box);
+  body.querySelectorAll('.st-case').forEach(g => { g.style.opacity = 1; }); // nada fica apagado por um destaque de mouse
+  rep.innerHTML = `<header class="rep-head"><h1>${esc(t('rep.cmpTitle', { view: t('cv.' + cmpView) }))}</h1><p>${esc(project.name || t('rep.subtitle'))}</p></header>
+    <section><h2>${esc(t('rep.method'))}</h2><dl class="rep-ficha">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></section>
+    <section class="rep-cmp"><h2>${esc(t('rep.results'))}</h2></section>`;
+  rep.querySelector('.rep-cmp').appendChild(body);
   document.body.classList.add('printing-report');
   const done = () => { document.body.classList.remove('printing-report'); rep.innerHTML = ''; window.removeEventListener('afterprint', done); };
   window.addEventListener('afterprint', done);
@@ -2273,6 +2308,7 @@ $('exCopy').addEventListener('click', () => {
   else putIO(s, 'CSV');
 });
 $('exPrint').addEventListener('click', printReport);
+$('cmpReport').addEventListener('click', printCompareReport);
 $('cmpExport').addEventListener('click', () => {
   const table = $('compareBox').querySelector('table');
   if (!table) { toast(t('cmp.noTable')); return; }

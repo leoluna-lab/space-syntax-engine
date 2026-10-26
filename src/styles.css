@@ -360,6 +360,11 @@ input.calib { width: 6rem; min-height: 32px; background: var(--paper); }
   .report .valbox, .report table, .report .scatterbox { break-inside: avoid; }
   .report svg.scatter { max-height: 85mm; }
   .report table { font-size: 8pt; } .report th { position: static; }
+  .report .mini-grid { grid-template-columns: 1fr 1fr; gap: 8pt; }
+  .report figure.mini { break-inside: avoid; border: 1px solid #ccc; }
+  .report svg.minisvg { max-height: 80mm; }
+  .report .slopewrap { overflow: visible; } .report .slope { min-width: 0; break-inside: avoid; }
+  .report .chips, .report .cmp-pair select { display: none; }
 }
 
 /* ---------- diagnóstico ---------- */
